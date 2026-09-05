@@ -541,6 +541,45 @@ Key topics covered:
 - **REST API Endpoints**: Checking wallet status, registering DUST, querying contract state, and triggering ZK proofs via `curl`.
 - **Direct GraphQL Queries**: Checking Midnight network epoch info (`currentEpochInfo`) and indexer capabilities.
 - **DUST Generation Diagnostics**: Verifying UTXO registration status and time-based DUST accrual.
+- **Lace Extension Troubleshooting**: Resolving channel shutdown and network handshake errors without reinstalling.
+
+---
+
+### 🔌 Browser Wallet (Midnight Lace Extension) Troubleshooting
+
+#### 1. `Remote API with channel 'midnight-authenticator' was shutdown: object can no longer be used`
+
+* **Root Cause**: In Manifest V3 extensions, communication between the web page and the background service worker occurs over named message ports. When an authorization prompt times out, is rejected, or is manually removed from Lace's *Authorized DApps*, Lace's internal service worker marks that channel as disconnected. Because Chrome persists extension state in **LevelDB** (`chrome.storage.local`), restarting the browser alone does not clear this broken state.
+
+* **Manual Remediation (Without Reinstalling Lace)**:
+  * **Option A: Reload the Extension (Fastest — 5 seconds)**:
+    1. Navigate to `chrome://extensions` in Chrome.
+    2. Locate the **Lace** extension card.
+    3. Click the circular **Reload** icon (**↻**) (or toggle Off and back On).
+    4. Return to the DApp tab and press **F5** to refresh.
+    *(This terminates the frozen background service worker process, resets the port listeners, and restarts the communication bus without deleting your wallet keys.)*
+  * **Option B: Clear Extension Storage via DevTools**:
+    1. In `chrome://extensions`, enable **Developer mode** (top-right toggle).
+    2. Click the link **`service worker`** under Lace to open its background DevTools.
+    3. In the DevTools Console, run:
+       ```javascript
+       chrome.storage.local.get(null, (items) => {
+         const keys = Object.keys(items).filter(k => k.toLowerCase().includes('dapp') || k.toLowerCase().includes('midnight'));
+         chrome.storage.local.remove(keys, () => console.log('Cleared stuck session channels:', keys));
+       });
+       ```
+    4. Refresh your DApp tab (`F5`).
+  * **Option C: Clear LevelDB Settings Cache (When Browser is Closed)**:
+    ```bash
+    rm -rf ~/.config/google-chrome/Default/Local\ Extension\ Settings/gafhhkghbfjjkeiendhlofajokpaflmk/*
+    ```
+
+#### 2. `Invalid network ID: undefined. Valid networks are: mainnet, testnet, devnet, qanet, undeployed, preview, preprod`
+
+* **Root Cause**: Lace's Midnight DApp Connector specification (`MidnightWalletApi.connect(networkId)`) strictly validates the network ID argument against its supported network list. Passing `undefined`, empty string, or generic `'active'` triggers an immediate rejection in `checkNetworkSupport()`.
+* **Fix**:
+  * In the **Wallet Studio** (`/wallet`), ensure the **Target Network** pill is set to **Preprod (Recommended)**.
+  * The connector automatically sanitizes inputs via `normalizeMidnightNetworkId()`, guaranteeing that calls to `connector.connect()` always receive `'preprod'`.
 
 ---
 

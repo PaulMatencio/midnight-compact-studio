@@ -72,6 +72,9 @@ export const WalletStudio: React.FC<WalletStudioProps> = ({
     extensionAddress,
     extensionShieldedAddress,
     extensionNetworkId,
+    targetNetwork,
+    setTargetNetwork,
+    connectionProgress,
     connectExtension,
     disconnectExtension,
     recheckExtension,
@@ -82,6 +85,7 @@ export const WalletStudio: React.FC<WalletStudioProps> = ({
   const [copiedSeed, setCopiedSeed] = useState(false);
   const [inputSeed, setInputSeed] = useState(seed);
   const [isConnectingExtension, setIsConnectingExtension] = useState(false);
+  const [extensionError, setExtensionError] = useState<string>('');
   const [showSendModal, setShowSendModal] = useState(false);
   const [successToast, setSuccessToast] = useState('');
   useEffect(() => {
@@ -159,13 +163,18 @@ export const WalletStudio: React.FC<WalletStudioProps> = ({
     }
   };
 
-  const handleConnectExtension = async () => {
+  const handleConnectExtension = async (overrideNet?: string) => {
     setIsConnectingExtension(true);
+    setExtensionError('');
     try {
-      await connectExtension();
-      toast.success('Wallet Connected', 'Connected to Midnight Lace Extension');
+      const connected = await connectExtension(overrideNet);
+      if (connected) {
+        toast.success('Wallet Connected', 'Connected to Midnight Lace Extension');
+      }
     } catch (err: any) {
-      toast.error('Connection Failed', err.message || 'Could not connect to extension');
+      const msg = err.message || 'Could not connect to extension';
+      setExtensionError(msg);
+      toast.error('Connection Failed', msg);
     } finally {
       setIsConnectingExtension(false);
     }
@@ -346,9 +355,16 @@ export const WalletStudio: React.FC<WalletStudioProps> = ({
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Sign transactions securely via browser popups. Your seed phrase never leaves your wallet extension.
-                </p>
+                {isConnectingExtension ? (
+                  <p className="text-xs text-cyan-300 animate-pulse mt-0.5 font-medium flex items-center gap-1.5">
+                    <span className="inline-block w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+                    Approval requested: check your Lace extension popup or browser toolbar icon to confirm.
+                  </p>
+                ) : (
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Sign transactions securely via browser popups. Your seed phrase never leaves your wallet extension.
+                  </p>
+                )}
               </div>
             </div>
 
@@ -365,16 +381,110 @@ export const WalletStudio: React.FC<WalletStudioProps> = ({
               ) : (
                 <button
                   type="button"
-                  onClick={handleConnectExtension}
+                  onClick={() => handleConnectExtension()}
                   disabled={isConnectingExtension}
-                  className="inline-flex items-center space-x-2 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-500 hover:from-purple-500 hover:to-cyan-400 text-white text-xs font-bold px-5 py-2.5 shadow-lg shadow-purple-950/50 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50"
+                  className="inline-flex items-center space-x-2 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-500 hover:from-purple-500 hover:to-cyan-400 text-white text-xs font-bold px-5 py-2.5 shadow-lg shadow-purple-950/50 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer disabled:opacity-75"
                 >
                   <Zap className={`h-4 w-4 text-cyan-200 ${isConnectingExtension ? 'animate-spin' : ''}`} />
-                  <span>{isConnectingExtension ? 'Connecting...' : 'Connect Midnight Wallet'}</span>
+                  <span>{isConnectingExtension ? 'Authorizing in Lace...' : 'Connect Midnight Wallet'}</span>
                 </button>
               )}
             </div>
           </div>
+
+          {/* Network Selection for Browser Wallet */}
+          {!isExtensionConnected && (
+            <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-white/5">
+              <span className="text-xs font-semibold text-slate-400">Target Network:</span>
+              {[
+                { id: 'preprod', label: 'Preprod (Recommended)', desc: 'Midnight Preprod Testnet' },
+                { id: 'preview', label: 'Preview', desc: 'Midnight Preview Testnet' },
+                { id: 'undeployed', label: 'DevNet', desc: 'Local / DevNet (Undeployed)' },
+              ].map((net) => (
+                <button
+                  key={net.id}
+                  type="button"
+                  onClick={() => {
+                    setTargetNetwork(net.id);
+                    setExtensionError('');
+                  }}
+                  disabled={isConnectingExtension}
+                  className={`px-3 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                    targetNetwork === net.id
+                      ? 'bg-purple-600 text-white shadow-md shadow-purple-900/40 border border-purple-400/50'
+                      : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10 border border-white/5'
+                  }`}
+                  title={net.desc}
+                >
+                  {net.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Real-time Connection Progress & Reload Tip */}
+          {isConnectingExtension && (
+            <div className="rounded-xl bg-cyan-950/40 border border-cyan-500/30 p-3 space-y-2 text-xs">
+              <div className="flex items-center gap-2 text-cyan-300 font-semibold">
+                <Zap className="h-4 w-4 animate-spin text-cyan-400" />
+                <span>{connectionProgress || 'Authorizing with Lace browser extension...'}</span>
+              </div>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-slate-300 pt-1 border-t border-cyan-500/20">
+                <p className="text-[11px] leading-relaxed">
+                  Please approve the connection prompt in your Lace extension window. If Lace is locked, enter your wallet password when prompted.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  className="shrink-0 px-2.5 py-1 rounded-lg bg-cyan-600/30 hover:bg-cyan-600/50 text-cyan-200 border border-cyan-500/40 text-[11px] font-semibold cursor-pointer transition-colors"
+                >
+                  Reload Page
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Connection Error Notice Card */}
+          {extensionError && (
+            <div className="rounded-xl bg-rose-950/40 border border-rose-500/40 p-4 space-y-3 text-xs shadow-lg">
+              <div className="flex items-start gap-2.5 text-rose-200">
+                <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold text-rose-100">Connection Handshake Notice</p>
+                  <p className="text-rose-300 mt-0.5 leading-relaxed">{extensionError}</p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-rose-500/20">
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  className="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs shadow cursor-pointer transition-all flex items-center gap-1.5"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  <span>Reload Page & Reconnect</span>
+                </button>
+                {targetNetwork !== 'preprod' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTargetNetwork('preprod');
+                      handleConnectExtension('preprod');
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-purple-600/40 hover:bg-purple-600/60 text-purple-200 border border-purple-400/40 font-semibold text-xs cursor-pointer transition-all"
+                  >
+                    Connect with Preprod Network
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setExtensionError('')}
+                  className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 text-xs cursor-pointer ml-auto"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Connected Info */}
           {isExtensionConnected ? (

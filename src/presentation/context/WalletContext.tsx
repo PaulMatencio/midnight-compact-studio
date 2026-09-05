@@ -44,7 +44,10 @@ interface WalletContextType {
     extensionShieldedAddress: string;
     extensionNetworkId: string;
     extensionApi: MidnightConnectedApi | null;
-    connectExtension: () => Promise<boolean>;
+    targetNetwork: string;
+    setTargetNetwork: (net: string) => void;
+    connectionProgress: string;
+    connectExtension: (overrideNetwork?: string) => Promise<boolean>;
     disconnectExtension: () => void;
     recheckExtension: () => boolean;
     seed: string;
@@ -77,8 +80,26 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const [extensionAddress, setExtensionAddress] = useState<string>('');
     const [extensionShieldedAddress, setExtensionShieldedAddress] = useState<string>('');
     const [extensionNetworkId, setExtensionNetworkId] = useState<string>('preprod');
+    const [targetNetwork, setTargetNetworkState] = useState<string>(() => {
+        if (typeof window !== 'undefined') {
+            try {
+                const saved = localStorage.getItem('midnight_target_network');
+                if (saved && saved !== 'active') return saved;
+            } catch {}
+        }
+        return 'preprod';
+    });
+    const [connectionProgress, setConnectionProgress] = useState<string>('');
     const [extensionApi, setExtensionApi] = useState<MidnightConnectedApi | null>(null);
     const extensionApiRef = useRef<MidnightConnectedApi | null>(null);
+
+    const setTargetNetwork = useCallback((net: string) => {
+        const cleanNet = !net || net === 'active' ? 'preprod' : net;
+        setTargetNetworkState(cleanNet);
+        try {
+            localStorage.setItem('midnight_target_network', cleanNet);
+        } catch {}
+    }, []);
 
     // Active walletStatus depending on current mode
     const walletStatus =
@@ -86,10 +107,12 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             ? extensionWalletStatus
             : seedWalletStatus;
 
+    const isConnectingRef = useRef(false);
+
     // Recheck extension helper
     const recheckExtension = useCallback((): boolean => {
         const installed = isMidnightExtensionInstalled();
-        setIsExtensionInstalled(installed);
+        setIsExtensionInstalled((prev) => (prev !== installed ? installed : prev));
         return installed;
     }, []);
 
@@ -112,24 +135,34 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }, [recheckExtension]);
 
     // Connect to Midnight Lace Browser Extension (Zero-Seed)
-    const connectExtension = useCallback(async (): Promise<boolean> => {
+    const connectExtension = useCallback(async (overrideNetwork?: string): Promise<boolean> => {
+        if (isConnectingRef.current) {
+            console.log('[WalletContext] Connection attempt already in flight, skipping duplicate request.');
+            return false;
+        }
+        isConnectingRef.current = true;
+
         try {
             recheckExtension();
-            const res = await connectMidnightLaceWallet();
+            const activeNet = overrideNetwork || targetNetwork || 'preprod';
+            const cleanNet = activeNet === 'active' ? 'preprod' : activeNet;
+            setConnectionProgress(`Connecting to Lace on ${cleanNet}...`);
+            const res = await connectMidnightLaceWallet(cleanNet, (msg) => setConnectionProgress(msg));
             extensionApiRef.current = res.api;
             setExtensionApi(res.api);
             setExtensionAddress(res.address);
             setExtensionShieldedAddress(res.shieldedAddress || '');
-            setExtensionNetworkId(res.networkId || 'preprod');
+            setExtensionNetworkId(res.networkId || cleanNet);
             setIsExtensionConnected(true);
             setIsExtensionInstalled(true);
             setConnectionMode('extension');
+            setConnectionProgress('');
 
             try {
                 localStorage.setItem('midnight_wallet_connection_mode', 'extension');
             } catch {}
 
-            // Immediately set the extension wallet status with preprod balances
+            // Immediately set the extension wallet status with live balances
             const extStatus: WalletStatus = {
                 unshieldedAddress: res.address,
                 shieldedAddress: res.shieldedAddress,
@@ -143,8 +176,8 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 syncProgress: {
                     isSynced: true,
                     percentage: 100,
-                    appliedId: 'Lace Preprod',
-                    highestTransactionId: 'Preprod Synced',
+                    appliedId: 'Lace Synced',
+                    highestTransactionId: 'Lace Connected',
                     isConnected: true,
                     unshielded: { applied: '1', highest: '1', percentage: 100 },
                     shielded: { applied: '1', highest: '1', percentage: 100 },
@@ -155,9 +188,12 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             return true;
         } catch (err: any) {
             console.error('Failed to connect Midnight extension:', err);
+            setConnectionProgress('');
             throw err;
+        } finally {
+            isConnectingRef.current = false;
         }
-    }, [recheckExtension]);
+    }, [recheckExtension, targetNetwork, systemHealth?.network]);
 
     const disconnectExtension = useCallback(() => {
         extensionApiRef.current = null;
@@ -186,44 +222,30 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         } catch {}
     }, []);
 
-    // Restore saved connectionMode and seed on initial mount
+    // Restore saved connectionMode and seed on initial mount ONCE
     useEffect(() => {
         try {
             const savedMode = localStorage.getItem('midnight_wallet_connection_mode') as WalletConnectionMode | null;
             const savedSeed = localStorage.getItem('midnight_wallet_seed');
+            const savedNet = localStorage.getItem('midnight_target_network');
 
             if (savedSeed) {
                 setSeed(savedSeed);
             }
 
+            if (savedNet) {
+                setTargetNetworkState(savedNet);
+            }
+
             if (savedMode === 'extension') {
                 setConnectionMode('extension');
-                // Silently auto-reconnect to Lace extension
-                const autoConnect = async () => {
-                    if (isMidnightExtensionInstalled()) {
-                        try {
-                            await connectExtension();
-                        } catch (err) {
-                            console.log('[WalletContext] Auto-reconnect to extension pending/failed:', err);
-                        }
-                    }
-                };
-
-                autoConnect();
-                const t1 = setTimeout(autoConnect, 300);
-                const t2 = setTimeout(autoConnect, 1000);
-                const t3 = setTimeout(autoConnect, 2500);
-
-                return () => {
-                    clearTimeout(t1);
-                    clearTimeout(t2);
-                    clearTimeout(t3);
-                };
+                // Do not auto-call connectExtension on mount to avoid interrupting Lace session.
+                // User clicks 'Connect Midnight Wallet' to initiate authorization with a user gesture.
             } else if (savedMode === 'seed') {
                 setConnectionMode('seed');
             }
         } catch {}
-    }, [connectExtension]);
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Sync seed from default deployment when available ONLY if user has not set their own saved seed
     useEffect(() => {
@@ -370,6 +392,9 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 extensionAddress,
                 extensionShieldedAddress,
                 extensionNetworkId,
+                targetNetwork,
+                setTargetNetwork,
+                connectionProgress,
                 extensionApi,
                 connectExtension,
                 disconnectExtension,

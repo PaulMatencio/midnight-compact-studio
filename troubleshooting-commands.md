@@ -227,4 +227,31 @@ This response confirms two important things:
    - Epochs on Midnight Preprod last 30 minutes (durationSeconds: 1800).
    - The DUST state machine activates the accrual calculation across the epoch boundary and updates the ledger's DUST commitment tree.
 
+---
 
+## 5. Browser Wallet (Lace Extension) Diagnostics & Quick Fixes
+
+### A. Fix Frozen Port Channel (`RemoteApiShutdownError` on `midnight-authenticator`)
+
+If the connection hangs or fails with channel shutdown because an earlier prompt was closed or interrupted:
+
+1. **Reload Lace Extension**: Open `chrome://extensions` in your browser and click the circular **Reload (↻)** button on the Lace card.
+2. **Clear Stuck Session State via DevTools**:
+   - In `chrome://extensions`, click **`service worker`** under Lace.
+   - In the Console, run:
+     ```javascript
+     chrome.storage.local.get(null, (items) => {
+       const keys = Object.keys(items).filter(k => k.toLowerCase().includes('dapp') || k.toLowerCase().includes('midnight'));
+       chrome.storage.local.remove(keys, () => console.log('Reset DApp connector channels:', keys));
+     });
+     ```
+3. **Reset Extension Local Settings Cache (Linux Shell, Browser Closed)**:
+   ```bash
+   rm -rf ~/.config/google-chrome/Default/Local\ Extension\ Settings/gafhhkghbfjjkeiendhlofajokpaflmk/*
+   ```
+
+### B. Fix Network ID Mismatch (`Invalid network ID: undefined`)
+
+* Lace's `MidnightWalletApi.connect(networkId)` requires a valid network identifier from:
+  `mainnet`, `testnet`, `devnet`, `qanet`, `undeployed`, `preview`, `preprod`.
+* Ensure the **Target Network** in **Wallet Studio** is set to **Preprod** (never `'active'` or empty).
