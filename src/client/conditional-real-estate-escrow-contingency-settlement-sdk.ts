@@ -111,8 +111,26 @@ export class ConditionalRealEstateEscrowContingencySettlementClient<
    * @param context - The Midnight constructor execution context.
    * @returns ConstructorResult containing initial contract and private states.
    */
-  public initialState(context: ConstructorContext<PS>): ConstructorResult<PS> {
-    return this.contract.initialState(context);
+  public initialState(
+    context: ConstructorContext<PS>,
+    buyerPk: Uint8Array = new Uint8Array(32),
+    sellerPk: Uint8Array = new Uint8Array(32),
+    inspectorPk: Uint8Array = new Uint8Array(32),
+    titleAgentPk: Uint8Array = new Uint8Array(32),
+    propertyHash: Uint8Array = new Uint8Array(32),
+    purchasePrice: bigint = 0n,
+    escrowDeposit: bigint = 0n
+  ): ConstructorResult<PS> {
+    return this.contract.initialState(
+      context,
+      buyerPk,
+      sellerPk,
+      inspectorPk,
+      titleAgentPk,
+      propertyHash,
+      purchasePrice,
+      escrowDeposit
+    );
   }
 
   /**

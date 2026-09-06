@@ -4,11 +4,19 @@ import { NextRequest, NextResponse } from 'next/server';
 import { container } from '@/src/infrastructure/di/container';
 import { CONTRACT_BLUEPRINTS } from '@/src/infrastructure/contracts/contract-registry';
 import type { ContractBlueprint } from '@/src/domain/entities/contract-registry.entity';
+import { parseContractConstructorParams } from '@/src/infrastructure/contracts/contract-inspector.server';
 
 export const dynamic = 'force-dynamic';
 
 function getAvailableManagedContracts(): ContractBlueprint[] {
-    const blueprints: Record<string, ContractBlueprint> = { ...CONTRACT_BLUEPRINTS };
+    const blueprints: Record<string, ContractBlueprint> = {};
+    for (const [key, bp] of Object.entries(CONTRACT_BLUEPRINTS)) {
+        blueprints[key] = {
+            ...bp,
+            constructorParams: bp.constructorParams || parseContractConstructorParams(bp.id),
+        };
+    }
+
     const managedDir = path.resolve(process.cwd(), 'contracts', 'managed');
 
     try {
@@ -19,12 +27,14 @@ function getAvailableManagedContracts(): ContractBlueprint[] {
                     const contractName = entry.name;
                     const contractJsPath = path.join(managedDir, contractName, 'contract', 'index.js');
                     if (fs.existsSync(contractJsPath) && !blueprints[contractName]) {
+                        const constructorParams = parseContractConstructorParams(contractName);
                         blueprints[contractName] = {
                             id: contractName,
                             name: contractName.split('-').map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(' '),
                             description: `Compiled Compact contract in contracts/managed/${contractName}`,
                             category: 'Utility',
                             version: '1.0.0',
+                            constructorParams,
                             circuits: [],
                             stateFields: [],
                         };
@@ -62,7 +72,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
-        const { seed, contractType = 'hello-world', privateStatePassword } = body;
+        const { seed, contractType = 'hello-world', privateStatePassword, constructorArgs } = body;
 
         if (!seed) {
             return NextResponse.json({ success: false, error: 'Seed is required to deploy a contract.' }, { status: 400 });
@@ -97,6 +107,7 @@ export async function POST(req: NextRequest) {
             seed,
             contractType,
             privateStatePassword: effectivePassword,
+            constructorArgs,
         });
 
         return NextResponse.json({ success: true, data: result });

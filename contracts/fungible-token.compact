@@ -12,8 +12,15 @@ export ledger _totalSupply: Uint<128>;
 export ledger _name: Opaque<"string">;
 export ledger _symbol: Opaque<"string">;
 export ledger _decimals: Uint<8>;
+export ledger owner: Bytes<32>;
 
-constructor() {
+constructor(initialOwner: Bytes<32>) {
+  owner = disclose(initialOwner);
+  _isInitialized = false;
+  _totalSupply = 0;
+  _decimals = 0;
+  _name = default<Opaque<"string">>;
+  _symbol = default<Opaque<"string">>;
 }
 
 export circuit initialize(
@@ -61,10 +68,10 @@ export circuit allowance(
                  spender: Bytes<32>
                  ): Uint<128> {
   assert(_isInitialized, "FungibleToken: contract not initialized");
-  if (!_allowances.member(disclose(owner)) || !_allowances.lookup(owner).member(disclose(spender))) {
+  if (!_allowances.member(disclose(owner)) || !_allowances.lookup(disclose(owner)).member(disclose(spender))) {
     return 0;
   }
-  return _allowances.lookup(owner).lookup(disclose(spender));
+  return _allowances.lookup(disclose(owner)).lookup(disclose(spender));
 }
 
 export circuit transfer(
@@ -99,6 +106,26 @@ export circuit transferFrom(
   return true;
 }
 
+export circuit mint(
+                 caller: Bytes<32>,
+                 to: Bytes<32>,
+                 value: Uint<128>
+                 ): Boolean {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  assert(disclose(caller) == owner, "FungibleToken: caller is not the owner");
+  _mint(to, value);
+  return true;
+}
+
+export circuit burn(
+                 caller: Bytes<32>,
+                 value: Uint<128>
+                 ): Boolean {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  _burn(caller, value);
+  return true;
+}
+
 export circuit _transfer(
                  fromAccount: Bytes<32>,
                  to: Bytes<32>,
@@ -118,19 +145,19 @@ circuit _update(
   assert(_isInitialized, "FungibleToken: contract not initialized");
   if (isZeroKey(disclose(fromAccount))) {
     const MAX_UINT128 = 340282366920938463463374607431768211455;
-    assert(MAX_UINT128 - _totalSupply >= value, "FungibleToken: arithmetic overflow");
-    _totalSupply = disclose(_totalSupply + value as Uint<128>);
+    assert(MAX_UINT128 - _totalSupply >= disclose(value), "FungibleToken: arithmetic overflow");
+    _totalSupply = (_totalSupply + disclose(value)) as Uint<128>;
   } else {
     const fromBal = balanceOf(fromAccount);
-    assert(fromBal >= value, "FungibleToken: insufficient balance");
-    _balances.insert(disclose(fromAccount), disclose(fromBal - value as Uint<128>));
+    assert(fromBal >= disclose(value), "FungibleToken: insufficient balance");
+    _balances.insert(disclose(fromAccount), (fromBal - disclose(value)) as Uint<128>);
   }
 
   if (isZeroKey(disclose(to))) {
-    _totalSupply = disclose(_totalSupply - value as Uint<128>);
+    _totalSupply = (_totalSupply - disclose(value)) as Uint<128>;
   } else {
     const toBal = balanceOf(to);
-    _balances.insert(disclose(to), disclose(toBal + value as Uint<128>));
+    _balances.insert(disclose(to), (toBal + disclose(value)) as Uint<128>);
   }
 }
 
@@ -157,7 +184,7 @@ export circuit _approve(
   if (!_allowances.member(disclose(owner))) {
     _allowances.insert(disclose(owner), default<Map<Bytes<32>, Uint<128>>>);
   }
-  _allowances.lookup(owner).insert(disclose(spender), disclose(value));
+  _allowances.lookup(disclose(owner)).insert(disclose(spender), disclose(value));
 }
 
 export circuit _spendAllowance(
@@ -167,15 +194,15 @@ export circuit _spendAllowance(
                  ): [] {
   assert(_isInitialized, "FungibleToken: contract not initialized");
   assert((_allowances.member(disclose(owner)) &&
-          _allowances.lookup(owner).member(disclose(spender))),
+          _allowances.lookup(disclose(owner)).member(disclose(spender))),
          "FungibleToken: insufficient allowance"
          );
 
-  const currentAllowance = _allowances.lookup(owner).lookup(disclose(spender));
+  const currentAllowance = _allowances.lookup(disclose(owner)).lookup(disclose(spender));
   const MAX_UINT128 = 340282366920938463463374607431768211455;
   if (currentAllowance < MAX_UINT128) {
-    assert(currentAllowance >= value, "FungibleToken: insufficient allowance");
-    _approve(owner, spender, currentAllowance - value as Uint<128>);
+    assert(currentAllowance >= disclose(value), "FungibleToken: insufficient allowance");
+    _approve(owner, spender, (currentAllowance - disclose(value)) as Uint<128>);
   }
 }
 

@@ -17,7 +17,8 @@ import {
     KeyRound,
     Eye,
     EyeOff,
-    Check
+    Check,
+    SlidersHorizontal,
 } from 'lucide-react';
 import { useWallet } from '@/src/presentation/context/WalletContext';
 import { useSystem } from '@/src/presentation/context/SystemContext';
@@ -49,6 +50,7 @@ export default function DeployPage() {
     });
     const [nickname, setNickname] = useState('');
     const [password, setPassword] = useState('');
+    const [constructorArgs, setConstructorArgs] = useState<Record<string, string>>({});
     const [showPassword, setShowPassword] = useState(false);
     const [hasEnvPassword, setHasEnvPassword] = useState<boolean>(false);
     const [showPasswordOverride, setShowPasswordOverride] = useState(false);
@@ -56,6 +58,26 @@ export default function DeployPage() {
     const [deployedAddress, setDeployedAddress] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [receipt, setReceipt] = useState<any>(null);
+
+    // Initialize constructor arguments whenever selected blueprint changes
+    useEffect(() => {
+        if (!selectedBlueprint?.constructorParams || selectedBlueprint.constructorParams.length === 0) {
+            setConstructorArgs({});
+            return;
+        }
+
+        const initial: Record<string, string> = {};
+        for (const param of selectedBlueprint.constructorParams) {
+            if (param.defaultValue === 'deployer') {
+                initial[param.name] = walletStatus?.coinPublicKey || 'deployer';
+            } else if (param.defaultValue !== undefined) {
+                initial[param.name] = String(param.defaultValue);
+            } else {
+                initial[param.name] = '';
+            }
+        }
+        setConstructorArgs(initial);
+    }, [selectedBlueprint, walletStatus?.coinPublicKey]);
 
     const isSynced = walletStatus?.isSynced ?? false;
     const syncPercentage = walletStatus?.syncProgress?.percentage ?? 0;
@@ -160,6 +182,7 @@ export default function DeployPage() {
                     seed,
                     contractType: selectedBlueprint.id,
                     privateStatePassword: password.trim() || undefined,
+                    constructorArgs,
                 }),
             });
 
@@ -333,6 +356,72 @@ export default function DeployPage() {
                                 </div>
                             )}
                         </div>
+
+                        {/* Constructor Parameters (if required by contract) */}
+                        {selectedBlueprint.constructorParams && selectedBlueprint.constructorParams.length > 0 && (
+                            <div className="space-y-3 rounded-xl bg-midnight-950/80 p-4 border border-cyan-500/20">
+                                <div className="flex items-center space-x-2 pb-1 border-b border-white/5">
+                                    <SlidersHorizontal className="h-4 w-4 text-cyan-400" />
+                                    <span className="text-xs font-semibold text-slate-200">Contract Constructor Arguments</span>
+                                    <span className="text-[10px] font-semibold text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-full border border-cyan-500/20">
+                                        {selectedBlueprint.constructorParams.length} {selectedBlueprint.constructorParams.length === 1 ? 'argument' : 'arguments'}
+                                    </span>
+                                </div>
+                                <p className="text-[11px] text-slate-400 leading-relaxed">
+                                    This contract requires initialization parameters for its on-chain ledger state.
+                                </p>
+
+                                <div className="space-y-3 pt-1">
+                                    {selectedBlueprint.constructorParams.map((param) => {
+                                        const isAddressType = param.type === 'address' || param.compactType?.includes('Bytes');
+                                        return (
+                                            <div key={param.name} className="space-y-1">
+                                                <div className="flex items-center justify-between">
+                                                    <label className="text-xs font-medium text-slate-300 flex items-center space-x-1.5">
+                                                        <span>{param.label}</span>
+                                                        <code className="text-[10px] font-mono text-cyan-400 bg-midnight-900 px-1 py-0.5 rounded">
+                                                            {param.compactType || param.type}
+                                                        </code>
+                                                        {param.required && <span className="text-rose-400">*</span>}
+                                                    </label>
+                                                    {isAddressType && walletStatus?.coinPublicKey && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() =>
+                                                                setConstructorArgs((prev) => ({
+                                                                    ...prev,
+                                                                    [param.name]: walletStatus.coinPublicKey!,
+                                                                }))
+                                                            }
+                                                            className="text-[10px] font-medium text-cyan-400 hover:text-cyan-300 underline cursor-pointer"
+                                                        >
+                                                            Use My Wallet Key
+                                                        </button>
+                                                    )}
+                                                </div>
+                                                <input
+                                                    type={param.type === 'number' ? 'number' : 'text'}
+                                                    placeholder={param.placeholder || `Enter ${param.label}...`}
+                                                    value={constructorArgs[param.name] ?? ''}
+                                                    onChange={(e) =>
+                                                        setConstructorArgs((prev) => ({
+                                                            ...prev,
+                                                            [param.name]: e.target.value,
+                                                        }))
+                                                    }
+                                                    className="w-full rounded-xl bg-midnight-900 border border-white/10 px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 font-mono"
+                                                />
+                                                {isAddressType && (
+                                                    <p className="text-[10px] text-slate-500">
+                                                        Leave empty or &quot;deployer&quot; to automatically use your wallet&apos;s 32-byte public key.
+                                                    </p>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
 
                         {/* Optional Nickname */}
                         <div className="space-y-1.5">

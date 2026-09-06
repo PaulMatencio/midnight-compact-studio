@@ -1,0 +1,217 @@
+// SPDX-License-Identifier: MIT
+// Compact FungibleToken Contract
+pragma language_version >= 0.23;
+
+import CompactStandardLibrary;
+
+export ledger _isInitialized: Boolean;
+export ledger _balances: Map<Bytes<32>, Uint<128>>;
+export ledger _allowances: Map<Bytes<32>, Map<Bytes<32>, Uint<128>>>;
+export ledger _totalSupply: Uint<128>;
+
+export ledger _name: Opaque<"string">;
+export ledger _symbol: Opaque<"string">;
+export ledger _decimals: Uint<8>;
+export ledger owner: Bytes<32>;
+
+constructor(initialOwner: Bytes<32>) {
+  owner = disclose(initialOwner);
+  _isInitialized = false;
+  _totalSupply = 0;
+  _decimals = 0;
+  _name = default<Opaque<"string">>;
+  _symbol = default<Opaque<"string">>;
+}
+
+export circuit initialize(
+                 name_: Opaque<"string">,
+                 symbol_: Opaque<"string">,
+                 decimals_: Uint<8>
+                 ): [] {
+  assert(!_isInitialized, "FungibleToken: contract already initialized");
+  _isInitialized = true;
+  _name = disclose(name_);
+  _symbol = disclose(symbol_);
+  _decimals = disclose(decimals_);
+}
+
+export circuit name(): Opaque<"string"> {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  return _name;
+}
+
+export circuit symbol(): Opaque<"string"> {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  return _symbol;
+}
+
+export circuit decimals(): Uint<8> {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  return _decimals;
+}
+
+export circuit totalSupply(): Uint<128> {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  return _totalSupply;
+}
+
+export circuit balanceOf(account: Bytes<32>): Uint<128> {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  if (!_balances.member(disclose(account))) {
+    return 0;
+  }
+  return _balances.lookup(disclose(account));
+}
+
+export circuit allowance(
+                 owner: Bytes<32>,
+                 spender: Bytes<32>
+                 ): Uint<128> {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  if (!_allowances.member(disclose(owner)) || !_allowances.lookup(disclose(owner)).member(disclose(spender))) {
+    return 0;
+  }
+  return _allowances.lookup(disclose(owner)).lookup(disclose(spender));
+}
+
+export circuit transfer(
+                 caller: Bytes<32>,
+                 to: Bytes<32>,
+                 value: Uint<128>
+                 ): Boolean {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  _transfer(caller, to, value);
+  return true;
+}
+
+export circuit approve(
+                 caller: Bytes<32>,
+                 spender: Bytes<32>,
+                 value: Uint<128>
+                 ): Boolean {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  _approve(caller, spender, value);
+  return true;
+}
+
+export circuit transferFrom(
+                 caller: Bytes<32>,
+                 fromAccount: Bytes<32>,
+                 to: Bytes<32>,
+                 value: Uint<128>
+                 ): Boolean {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  _spendAllowance(fromAccount, caller, value);
+  _transfer(fromAccount, to, value);
+  return true;
+}
+
+export circuit mint(
+                 caller: Bytes<32>,
+                 to: Bytes<32>,
+                 value: Uint<128>
+                 ): Boolean {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  assert(disclose(caller) == owner, "FungibleToken: caller is not the owner");
+  _mint(to, value);
+  return true;
+}
+
+export circuit burn(
+                 caller: Bytes<32>,
+                 value: Uint<128>
+                 ): Boolean {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  assert(disclose(caller) == owner, "FungibleToken: caller is not the owner");
+  _burn(caller, value);
+  return true;
+}
+
+ circuit _transfer(
+                 fromAccount: Bytes<32>,
+                 to: Bytes<32>,
+                 value: Uint<128>
+                 ): [] {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  assert(!isZeroKey(fromAccount), "FungibleToken: invalid sender");
+  assert(!isZeroKey(to), "FungibleToken: invalid receiver");
+  _update(fromAccount, to, value);
+}
+
+circuit _update(
+          fromAccount: Bytes<32>,
+          to: Bytes<32>,
+          value: Uint<128>
+          ): [] {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  if (isZeroKey(disclose(fromAccount))) {
+    const MAX_UINT128 = 340282366920938463463374607431768211455;
+    assert(MAX_UINT128 - _totalSupply >= disclose(value), "FungibleToken: arithmetic overflow");
+    _totalSupply = (_totalSupply + disclose(value)) as Uint<128>;
+  } else {
+    const fromBal = balanceOf(fromAccount);
+    assert(fromBal >= disclose(value), "FungibleToken: insufficient balance");
+    _balances.insert(disclose(fromAccount), (fromBal - disclose(value)) as Uint<128>);
+  }
+
+  if (isZeroKey(disclose(to))) {
+    _totalSupply = (_totalSupply - disclose(value)) as Uint<128>;
+  } else {
+    const toBal = balanceOf(to);
+    _balances.insert(disclose(to), (toBal + disclose(value)) as Uint<128>);
+  }
+}
+
+circuit _mint(account: Bytes<32>, value: Uint<128>): [] {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  assert(!isZeroKey(account), "FungibleToken: invalid receiver");
+  _update(zeroKey(), account, value);
+}
+
+circuit _burn(account: Bytes<32>, value: Uint<128>): [] {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  assert(!isZeroKey(account), "FungibleToken: invalid sender");
+  _update(account, zeroKey(), value);
+}
+
+
+circuit _approve(
+                 owner: Bytes<32>,
+                 spender: Bytes<32>,
+                 value: Uint<128>
+                 ): [] {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  assert(!isZeroKey(owner), "FungibleToken: invalid owner");
+  assert(!isZeroKey(spender), "FungibleToken: invalid spender");
+  if (!_allowances.member(disclose(owner))) {
+    _allowances.insert(disclose(owner), default<Map<Bytes<32>, Uint<128>>>);
+  }
+  _allowances.lookup(disclose(owner)).insert(disclose(spender), disclose(value));
+}
+
+circuit _spendAllowance(
+                 owner: Bytes<32>,
+                 spender: Bytes<32>,
+                 value: Uint<128>
+                 ): [] {
+  assert(_isInitialized, "FungibleToken: contract not initialized");
+  assert((_allowances.member(disclose(owner)) &&
+          _allowances.lookup(disclose(owner)).member(disclose(spender))),
+         "FungibleToken: insufficient allowance"
+         );
+
+  const currentAllowance = _allowances.lookup(disclose(owner)).lookup(disclose(spender));
+  const MAX_UINT128 = 340282366920938463463374607431768211455;
+  if (currentAllowance < MAX_UINT128) {
+    assert(currentAllowance >= disclose(value), "FungibleToken: insufficient allowance");
+    _approve(owner, spender, (currentAllowance - disclose(value)) as Uint<128>);
+  }
+}
+
+pure circuit isZeroKey(key: Bytes<32>): Boolean {
+  return key == default<Bytes<32>>;
+}
+
+pure circuit zeroKey(): Bytes<32> {
+  return default<Bytes<32>>;
+}

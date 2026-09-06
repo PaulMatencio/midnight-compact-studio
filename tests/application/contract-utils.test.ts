@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { getCleanContractBaseName, CONTRACT_PATHS } from '../../src/lib/contract-utils';
+import { parseContractConstructorParams } from '../../src/infrastructure/contracts/contract-inspector.server';
 
 describe('getCleanContractBaseName', () => {
     it('cleans simple compact filenames', () => {
@@ -54,5 +55,33 @@ describe('getCleanContractBaseName', () => {
         expect(CONTRACT_PATHS.example(base)).toBe('examples/fungible-token-example.ts');
         expect(CONTRACT_PATHS.installScript(base)).toBe('scripts/fungible-token-install.sh');
         expect(CONTRACT_PATHS.test(base)).toBe('tests/contracts/fungible-token.test.ts');
+    });
+});
+
+describe('parseContractConstructorParams', () => {
+    it('returns empty array for contracts with zero constructor arguments', () => {
+        const params = parseContractConstructorParams('hello-world');
+        expect(params).toEqual([]);
+    });
+
+    it('parses constructor parameter for fungible-token-v2 correctly', () => {
+        const params = parseContractConstructorParams('fungible-token-v2');
+        expect(params.length).toBe(1);
+        expect(params[0].name).toBe('initialOwner');
+        expect(params[0].type).toBe('address');
+        expect(params[0].compactType).toBe('Bytes<32>');
+        expect(params[0].required).toBe(true);
+    });
+
+    it('parses constructor parameter for secret-validator correctly', () => {
+        const params = parseContractConstructorParams('secret-validator');
+        expect(params.length).toBe(1);
+        expect(params[0].name).toBe('initialHash');
+        expect(params[0].type).toBe('address');
+        expect(params[0].compactType).toBe('Bytes<32>');
+    });
+
+    it('returns empty array for unknown or non-existent contracts', () => {
+        expect(parseContractConstructorParams('non-existent-contract-xyz')).toEqual([]);
     });
 });

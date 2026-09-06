@@ -23,6 +23,7 @@ export interface DeployContractInput {
     seed: string;
     contractType?: string;
     privateStatePassword?: string;
+    constructorArgs?: Record<string, any> | any[];
 }
 
 export interface DeployContractOutput extends DeploymentExecutionReceipt {}

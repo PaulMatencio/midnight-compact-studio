@@ -255,3 +255,21 @@ If the connection hangs or fails with channel shutdown because an earlier prompt
 * Lace's `MidnightWalletApi.connect(networkId)` requires a valid network identifier from:
   `mainnet`, `testnet`, `devnet`, `qanet`, `undeployed`, `preview`, `preprod`.
 * Ensure the **Target Network** in **Wallet Studio** is set to **Preprod** (never `'active'` or empty).
+
+### C. Upstream Gateway Outage (`HTTP 502 Bad Gateway` on `blockfrost.lw.iog.io`)
+
+* **Symptoms**:
+  * In Lace's Service Worker console (`chrome://extensions` > `service worker`):
+    ```text
+    WebSocket connection to 'wss://blockfrost.lw.iog.io/midnight-preprod-rpc/ws' failed: Error during WebSocket handshake: Unexpected response code: 502
+    ```
+    or
+    ```text
+    RPC-CORE: subscribeRuntimeVersion(): RuntimeVersion:: disconnected from wss://blockfrost.lw.iog.io/...: 1000:: Normal Closure
+    ```
+  * Lace authorization popups hang or fail to open.
+* **Root Cause**: IOG's hosted backend proxy for Lace (`blockfrost.lw.iog.io`) is temporarily unable to reach upstream Midnight nodes during routine node maintenance or network upgrades.
+* **Remedy**:
+  * **Do NOT reinstall Lace or re-import wallet seed phrases.** Your local wallet data is intact.
+  * Lace will automatically recover as soon as IOG's gateway connection to the Preprod RPC node is restored.
+

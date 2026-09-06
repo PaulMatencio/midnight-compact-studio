@@ -29,7 +29,7 @@ function generateGeminiDAppPrompt(
 
     return `# Midnight Network DApp Frontend Architecture Prompt: ${pascalName}
 
-You are an expert full-stack Web3 engineer specializing in the **Midnight Network**, the **Compact smart contract runtime**, and modern **React 19 / Next.js (App Router)** frontend engineering.
+You are an expert full-stack Web3 engineer and UI/UX designer specializing in the **Midnight Network**, the **Compact smart contract runtime**, modern **React 19 / Next.js (App Router)** frontend engineering, and world-class **UI/UX design**.
 
 A Midnight Compact smart contract called **\`${baseContractName}\`** has been compiled, tested, and prepared for deployment. All relevant contract artifacts, compiled TypeScript definitions, ZKIR circuit bytecodes, client SDK adapters, and deployment configurations are provided in this bundle.
 
@@ -58,7 +58,7 @@ Scaffold and implement a complete, production-grade **React 19 / Next.js (App Ro
   - \`@midnight-ntwrk/midnight-js-level-private-state-provider\` (or in-browser IndexedDB / LocalStorage adapter)
   - \`@midnight-ntwrk/midnight-js-types\`
 - **State & Reactivity**: React Context + RxJS observables for live indexer contract state subscriptions.
-- **Styling**: Modern dark-mode UI with Tailwind CSS or Vanilla CSS, Lucide React icons, and sleek feedback toasts.
+- **Styling & UX/UI**: Modern dark-mode UI with Tailwind CSS or Vanilla CSS, Lucide React icons, rich visual hierarchy, smooth micro-interactions, responsive layouts, and sleek feedback toasts.
 
 ---
 
@@ -106,7 +106,7 @@ Assemble the 5 essential Midnight providers into a unified \`MidnightProvider\`:
     2. Zero-Knowledge proof generation (with UI progress indicator).
     3. Block submission and confirmation polling.
 
-#### Module D: UI Components & Dashboard
+#### Module D: UI Components, UX & Dashboard
 1. **Contract Overview Card**: Displays deployed contract address, network status, and live ledger fields.
 2. **Interactive Circuit Actions**:
    - Clean forms with input validation for every circuit parameter.
@@ -116,6 +116,10 @@ Assemble the 5 essential Midnight providers into a unified \`MidnightProvider\`:
      - \`Submitting to Midnight Blockchain...\`
      - \`Confirmed in Block #...\`
 3. **Activity & Audit Log**: Shows past interactions, transaction hashes, and error diagnostics.
+4. **UX/UI Design Standards**:
+   - Polished dark mode with curated color accents (deep Midnight blues, cyan, and violet highlights).
+   - Clear loading skeletons, error states, and optimistic UI updates where appropriate.
+   - Accessible, mobile-friendly responsive layout with intuitive navigation.
 
 ---
 

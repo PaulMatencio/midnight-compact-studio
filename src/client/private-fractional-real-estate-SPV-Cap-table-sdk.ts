@@ -99,8 +99,13 @@ export class PrivateFractionalRealEstateSPVCapTableClient<
    * @param context Constructor context with private state and coin public key.
    * @returns Initial deployment states.
    */
-  public initialState(context: ConstructorContext<PS>): ConstructorResult<PS> {
-    return this.contract.initialState(context);
+  public initialState(
+    context: ConstructorContext<PS>,
+    initialManager: Uint8Array = new Uint8Array(32),
+    initialPropertyId: Uint8Array = new Uint8Array(32),
+    authorizedShares: bigint = 0n
+  ): ConstructorResult<PS> {
+    return this.contract.initialState(context, initialManager, initialPropertyId, authorizedShares);
   }
 
   /**

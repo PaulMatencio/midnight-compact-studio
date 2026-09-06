@@ -20,7 +20,7 @@ import {
   ledger,
   type Witnesses as ContractWitnesses,
   type Ledger as ContractLedger,
-} from '../../contracts/managed/FungibleToken/contract/index.js';
+} from '../../contracts/managed/fungible-token/contract/index.js';
 
 /**
  * Client-side private state interface for FungibleToken operations.
@@ -70,8 +70,8 @@ export class FungibleTokenClient<PS extends FungibleTokenPrivateState = Fungible
    * @param context Constructor context containing initial private state and coin public key.
    * @returns ConstructorResult containing the initial contract state and private state.
    */
-  public initialState(context: ConstructorContext<PS>): ConstructorResult<PS> {
-    return this.contract.initialState(context);
+  public initialState(context: ConstructorContext<PS>, initialOwner: Uint8Array = new Uint8Array(32)): ConstructorResult<PS> {
+    return this.contract.initialState(context, initialOwner);
   }
 
   /**

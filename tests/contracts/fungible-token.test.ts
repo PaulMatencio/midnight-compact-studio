@@ -47,7 +47,7 @@ describe('FungibleToken Contract Tests', () => {
     privateState = {};
 
     const constructorCtx = CompactRuntime.createConstructorContext(privateState, dummyCoinPublicKey);
-    const { currentContractState, currentPrivateState } = contract.initialState(constructorCtx);
+    const { currentContractState, currentPrivateState } = contract.initialState(constructorCtx, ALICE);
 
     privateState = currentPrivateState;
     circuitContext = CompactRuntime.createCircuitContext(

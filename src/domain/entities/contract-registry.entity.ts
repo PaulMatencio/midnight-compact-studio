@@ -5,6 +5,7 @@
 export interface CircuitParamDescriptor {
     name: string;
     type: 'string' | 'number' | 'boolean' | 'address';
+    compactType?: string;
     label: string;
     description?: string;
     placeholder?: string;
@@ -32,6 +33,7 @@ export interface ContractBlueprint {
     description: string;
     category: 'Messaging' | 'Token' | 'Governance' | 'Utility';
     version: string;
+    constructorParams?: CircuitParamDescriptor[];
     circuits: CircuitDescriptor[];
     stateFields: StateFieldDescriptor[];
 }

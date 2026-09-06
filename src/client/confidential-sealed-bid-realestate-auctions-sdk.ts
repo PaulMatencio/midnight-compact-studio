@@ -95,8 +95,8 @@ export class ConfidentialSealedBidRealestateAuctionsClient<
   constructor(witnesses: ConfidentialSealedBidRealestateAuctionsWitnesses<PS>) {
     // Map SDK witness interface to runtime expected witnesses
     const contractWitnesses: ContractWitnesses<PS> = {
-      getBidDetails: (context: WitnessContext<ContractLedger, PS>) => {
-        return witnesses.getBidDetails(context);
+      getBidDetails: (context: any) => {
+        return witnesses.getBidDetails(context) as any;
       },
     };
 
@@ -109,8 +109,13 @@ export class ConfidentialSealedBidRealestateAuctionsClient<
    * @param context - The constructor context containing initial private state and deployment keys.
    * @returns Constructor execution result with initial contract and private states.
    */
-  public initialState(context: ConstructorContext<PS>): ConstructorResult<PS> {
-    return this.contract.initialState(context);
+  public initialState(
+    context: ConstructorContext<PS>,
+    sellerPk: Uint8Array = new Uint8Array(32),
+    propertyIdentifier: Uint8Array = new Uint8Array(32),
+    reservePrice: bigint = 0n
+  ): ConstructorResult<PS> {
+    return this.contract.initialState(context, sellerPk, propertyIdentifier, reservePrice);
   }
 
   /**

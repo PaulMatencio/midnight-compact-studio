@@ -4,9 +4,10 @@ import { pathToFileURL } from 'node:url';
 import { findDeployedContract, deployContract } from '@midnight-ntwrk/midnight-js-contracts';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import { CompiledContract } from '@midnight-ntwrk/midnight-js-protocol/compact-js';
-import type { IContractGateway } from '@/src/domain/ports/i-contract.gateway';
+import type { IContractGateway, DeployContractOptions } from '@/src/domain/ports/i-contract.gateway';
 import type { IWalletGateway } from '@/src/domain/ports/i-wallet.gateway';
 import type { IDeploymentStorage } from '@/src/domain/ports/i-deployment.storage';
+import { parseContractConstructorParams } from '@/src/infrastructure/contracts/contract-inspector.server';
 import type {
     TransactionExecutionReceipt,
     DeploymentExecutionReceipt,
@@ -233,7 +234,7 @@ export class MidnightContractAdapter implements IContractGateway {
         return receipt;
     }
 
-    async deployContract(seed: string, options?: { contractType?: string; privateStatePassword?: string }): Promise<DeploymentExecutionReceipt> {
+    async deployContract(seed: string, options?: DeployContractOptions): Promise<DeploymentExecutionReceipt> {
         const contractType = options?.contractType || 'hello-world';
         const password = options?.privateStatePassword?.trim() || MIDNIGHT_CONFIG.privateStatePassword;
 
@@ -261,10 +262,71 @@ export class MidnightContractAdapter implements IContractGateway {
             zkConfigPath,
         });
 
+        // Resolve constructor arguments for the target contract
+        const constructorParams = parseContractConstructorParams(contractType);
+        const resolvedArgs: any[] = [];
+        const userArgs = options?.constructorArgs;
+
+        for (let i = 0; i < constructorParams.length; i++) {
+            const param = constructorParams[i];
+            const cleanName = param.name.replace(/^_+/, '');
+            let userVal: any = undefined;
+
+            if (Array.isArray(userArgs)) {
+                userVal = userArgs[i];
+            } else if (userArgs && typeof userArgs === 'object') {
+                userVal = userArgs[param.name] ?? userArgs[cleanName];
+            }
+
+            if (param.type === 'address' || param.compactType?.includes('Bytes') || param.description?.includes('Uint8Array')) {
+                if (userVal instanceof Uint8Array && userVal.length === 32) {
+                    resolvedArgs.push(userVal);
+                } else if (typeof userVal === 'string' && userVal.trim() && userVal !== 'deployer') {
+                    const cleanHex = userVal.trim().replace(/^0x/, '');
+                    if (/^[0-9a-fA-F]{64}$/.test(cleanHex)) {
+                        resolvedArgs.push(new Uint8Array(Buffer.from(cleanHex, 'hex')));
+                    } else {
+                        throw new InvalidInputError(
+                            `Constructor argument '${param.label}' must be a 32-byte hex string (64 characters). Received: ${userVal}`
+                        );
+                    }
+                } else {
+                    // Default to deployer's coinPublicKey (32 bytes)
+                    if (walletCtx?.shieldedSecretKeys?.coinPublicKey) {
+                        resolvedArgs.push(new Uint8Array(walletCtx.shieldedSecretKeys.coinPublicKey));
+                    } else {
+                        resolvedArgs.push(new Uint8Array(crypto.randomBytes(32)));
+                    }
+                }
+            } else if (param.type === 'number' || param.compactType?.includes('Uint') || param.compactType?.includes('Field')) {
+                if (typeof userVal === 'bigint') {
+                    resolvedArgs.push(userVal);
+                } else if (typeof userVal === 'number') {
+                    resolvedArgs.push(BigInt(userVal));
+                } else if (typeof userVal === 'string' && userVal.trim()) {
+                    resolvedArgs.push(BigInt(userVal.trim()));
+                } else {
+                    resolvedArgs.push(0n);
+                }
+            } else if (param.type === 'boolean') {
+                resolvedArgs.push(Boolean(userVal));
+            } else if (param.compactType?.startsWith('Maybe') || param.description?.startsWith('Maybe')) {
+                if (typeof userVal === 'object' && userVal !== null && 'is_some' in userVal) {
+                    resolvedArgs.push(userVal);
+                } else if (typeof userVal === 'string' && userVal.trim().length > 0) {
+                    resolvedArgs.push({ is_some: true, value: userVal.trim() });
+                } else {
+                    resolvedArgs.push({ is_some: false, value: '' });
+                }
+            } else {
+                resolvedArgs.push(userVal !== undefined ? userVal : '');
+            }
+        }
+
         const startTime = Date.now();
         const deployed = await deployContract(providers as any, {
             compiledContract: compiledContract as any,
-            args: [],
+            args: resolvedArgs,
             privateStateId: `${contractType}State`,
             initialPrivateState: {},
         });

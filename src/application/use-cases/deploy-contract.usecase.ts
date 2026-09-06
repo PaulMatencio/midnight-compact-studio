@@ -8,6 +8,7 @@ export class DeployContractUseCase {
         return this.contractGateway.deployContract(input.seed, {
             contractType: input.contractType,
             privateStatePassword: input.privateStatePassword,
+            constructorArgs: input.constructorArgs,
         });
     }
 }

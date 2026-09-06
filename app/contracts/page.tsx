@@ -21,6 +21,8 @@ import { Breadcrumbs } from '@/components/Breadcrumbs';
 import { useToast } from '@/src/presentation/context/ToastContext';
 import type { DeployedContractRecord } from '@/src/domain/entities/contract-registry.entity';
 
+const EXPLORER_BASE = process.env.NEXT_PUBLIC_EXPLORER_URL || 'https://explorer.1am.xyz';
+
 export default function ContractsPage() {
     const [deployments, setDeployments] = useState<DeployedContractRecord[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -208,19 +210,51 @@ export default function ContractsPage() {
 
                                 <div className="space-y-2 text-xs">
                                     <div>
-                                        <span className="text-slate-400">Contract Address:</span>
-                                        <div className="mt-1 flex items-center justify-between rounded-lg bg-midnight-950 px-3 py-2 border border-white/5 font-mono text-cyan-300">
-                                            <span className="truncate mr-2">{contract.contractAddress}</span>
-                                            <button
-                                                onClick={() => copyToClipboard(contract.contractAddress, contract.contractAddress)}
-                                                className="text-slate-400 hover:text-white"
+                                        <div className="flex items-center justify-between text-slate-400 mb-1">
+                                            <span>Contract Address:</span>
+                                            <a
+                                                href={`${EXPLORER_BASE}/contract/${encodeURIComponent(contract.contractAddress)}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="text-[11px] text-indigo-400 hover:text-indigo-300 flex items-center space-x-1 transition-colors"
+                                                title="View in Midnight Explorer"
                                             >
-                                                {copied === contract.contractAddress ? (
-                                                    <Check className="h-3.5 w-3.5 text-emerald-400" />
-                                                ) : (
-                                                    <Copy className="h-3.5 w-3.5" />
-                                                )}
-                                            </button>
+                                                <span>Explorer</span>
+                                                <ExternalLink className="h-3 w-3" />
+                                            </a>
+                                        </div>
+                                        <div className="mt-1 flex items-center justify-between rounded-lg bg-midnight-950 px-3 py-2 border border-white/5 font-mono text-cyan-300">
+                                            <a
+                                                href={`${EXPLORER_BASE}/contract/${encodeURIComponent(contract.contractAddress)}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="truncate mr-2 hover:underline hover:text-cyan-200 transition-colors"
+                                                title="View in Midnight Explorer"
+                                            >
+                                                {contract.contractAddress}
+                                            </a>
+                                            <div className="flex items-center space-x-1.5 shrink-0">
+                                                <button
+                                                    onClick={() => copyToClipboard(contract.contractAddress, contract.contractAddress)}
+                                                    className="text-slate-400 hover:text-white transition-colors"
+                                                    title="Copy contract address"
+                                                >
+                                                    {copied === contract.contractAddress ? (
+                                                        <Check className="h-3.5 w-3.5 text-emerald-400" />
+                                                    ) : (
+                                                        <Copy className="h-3.5 w-3.5" />
+                                                    )}
+                                                </button>
+                                                <a
+                                                    href={`${EXPLORER_BASE}/contract/${encodeURIComponent(contract.contractAddress)}`}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="text-slate-400 hover:text-indigo-300 transition-colors p-0.5"
+                                                    title="Open in Midnight Explorer"
+                                                >
+                                                    <ExternalLink className="h-3.5 w-3.5" />
+                                                </a>
+                                            </div>
                                         </div>
                                     </div>
 

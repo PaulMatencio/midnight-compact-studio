@@ -73,8 +73,8 @@ export class FungibleTokenClient<PS extends FungibleTokenPrivateState = Fungible
    * @param context Constructor context containing initial private state and coin public key.
    * @returns ConstructorResult containing initial contract and private states.
    */
-  public initialState(context: ConstructorContext<PS>): ConstructorResult<PS> {
-    return this.contractInstance.initialState(context);
+  public initialState(context: ConstructorContext<PS>, initialOwner: Uint8Array = new Uint8Array(32)): ConstructorResult<PS> {
+    return this.contractInstance.initialState(context, initialOwner);
   }
 
   /**

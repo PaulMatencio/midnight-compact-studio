@@ -7,6 +7,7 @@ import type {
 export interface DeployContractOptions {
     contractType?: string;
     privateStatePassword?: string;
+    constructorArgs?: Record<string, any> | any[];
 }
 
 export interface IContractGateway {

@@ -29,6 +29,7 @@ describe('Export DApp Bundle API (/api/workspace/export-dapp)', () => {
         expect(data.masterPrompt).toContain('WalletProvider');
         expect(data.masterPrompt).toContain('PublicDataProvider');
         expect(data.masterPrompt).toContain('ProofProvider');
+        expect(data.masterPrompt).toContain('UI/UX design');
 
         // Verify deploymentConfig uses MIDNIGHT_CONFIG defaults
         expect(data.deploymentConfig.networkId).toBe(MIDNIGHT_CONFIG.networkId);

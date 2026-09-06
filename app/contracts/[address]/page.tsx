@@ -32,6 +32,8 @@ import type { TxRecord } from '@/src/types/tx';
 
 type ExecutionStage = 'idle' | 'syncing' | 'proving' | 'balancing' | 'submitting' | 'confirmed' | 'error';
 
+const EXPLORER_BASE = process.env.NEXT_PUBLIC_EXPLORER_URL || 'https://explorer.1am.xyz';
+
 export default function ContractWorkbenchPage({
     params,
 }: {
@@ -366,7 +368,7 @@ export default function ContractWorkbenchPage({
                                     )}
                                 </button>
                                 <a
-                                    href={`https://explorer.1am.xyz/contract/${contractAddress}`}
+                                    href={`${EXPLORER_BASE}/contract/${encodeURIComponent(contractAddress)}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="text-indigo-400 hover:text-indigo-300 transition-colors inline-flex items-center space-x-1"
