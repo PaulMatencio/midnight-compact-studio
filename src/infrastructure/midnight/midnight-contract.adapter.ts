@@ -22,8 +22,9 @@ import {
 import { MIDNIGHT_CONFIG } from '../config/midnight.config';
 import { createProviders } from './midnight-providers.factory';
 import * as LedgerV8 from '@midnight-ntwrk/ledger-v8';
-import * as OnchainRuntimeV3 from '@midnight-ntwrk/onchain-runtime-v3';
 import * as CompactRuntime from '@midnight-ntwrk/compact-runtime';
+import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
+import { MidnightBech32m, UnshieldedAddress } from '@midnight-ntwrk/wallet-sdk-address-format';
 
 // Guard global Reflect.get against wasm-bindgen non-object property lookups
 if (typeof globalThis.Reflect?.get === 'function') {
@@ -96,12 +97,12 @@ export class MidnightContractAdapter implements IContractGateway {
         private readonly walletGateway: IWalletGateway,
         private readonly deploymentStorage: IDeploymentStorage,
         private readonly txHistoryStorage?: FileTransactionHistoryStorage,
-    ) {}
+    ) { }
 
     async getContractArtifacts(contractType: string = 'hello-world', walletCtx?: any) {
         const zkConfigPath = path.resolve(process.cwd(), 'contracts', 'managed', contractType);
         const contractJsPath = path.join(zkConfigPath, 'contract', 'index.js');
-        
+
         if (!fs.existsSync(contractJsPath)) {
             throw new Error(`Compiled contract artifacts not found at contracts/managed/${contractType}. Please compile the contract first in the IDE.`);
         }
@@ -282,17 +283,30 @@ export class MidnightContractAdapter implements IContractGateway {
                 if (userVal instanceof Uint8Array && userVal.length === 32) {
                     resolvedArgs.push(userVal);
                 } else if (typeof userVal === 'string' && userVal.trim() && userVal !== 'deployer') {
-                    const cleanHex = userVal.trim().replace(/^0x/, '');
-                    if (/^[0-9a-fA-F]{64}$/.test(cleanHex)) {
-                        resolvedArgs.push(new Uint8Array(Buffer.from(cleanHex, 'hex')));
+                    const val = userVal.trim();
+                    if (val.startsWith('mn_') || val.startsWith('midnight')) {
+                        try {
+                            const decoded = MidnightBech32m.parse(val).decode(UnshieldedAddress, getNetworkId());
+                            resolvedArgs.push(new Uint8Array(decoded.data));
+                        } catch {
+                            throw new InvalidInputError(`Invalid Midnight Bech32 address: ${val}`);
+                        }
                     } else {
-                        throw new InvalidInputError(
-                            `Constructor argument '${param.label}' must be a 32-byte hex string (64 characters). Received: ${userVal}`
-                        );
+                        const cleanHex = val.replace(/^0x/, '');
+                        if (/^[0-9a-fA-F]{64}$/.test(cleanHex)) {
+                            resolvedArgs.push(new Uint8Array(Buffer.from(cleanHex, 'hex')));
+                        } else {
+                            throw new InvalidInputError(
+                                `Constructor argument '${param.label}' must be a valid Midnight address (mn_addr_...) or 32-byte hex string. Received: ${userVal}`
+                            );
+                        }
                     }
                 } else {
-                    // Default to deployer's coinPublicKey (32 bytes)
-                    if (walletCtx?.shieldedSecretKeys?.coinPublicKey) {
+                    // Default to deployer's unshielded address (32 bytes)
+                    if (walletCtx?.unshieldedKeystore?.getAddress) {
+                        const unshieldedHex = walletCtx.unshieldedKeystore.getAddress();
+                        resolvedArgs.push(new Uint8Array(Buffer.from(unshieldedHex, 'hex')));
+                    } else if (walletCtx?.shieldedSecretKeys?.coinPublicKey) {
                         resolvedArgs.push(new Uint8Array(walletCtx.shieldedSecretKeys.coinPublicKey));
                     } else {
                         resolvedArgs.push(new Uint8Array(crypto.randomBytes(32)));
@@ -338,11 +352,27 @@ export class MidnightContractAdapter implements IContractGateway {
         const durationMs = Date.now() - startTime;
         const dustPaid = walletCtx.lastDustFee ? walletCtx.lastDustFee.toString() : '0';
 
+        let owner: string | undefined = undefined;
+        for (let i = 0; i < constructorParams.length; i++) {
+            const param = constructorParams[i];
+            const pName = param.name.toLowerCase();
+            if (pName.includes('owner') || pName.includes('admin') || pName.includes('seller')) {
+                const arg = resolvedArgs[i];
+                if (arg instanceof Uint8Array || Buffer.isBuffer(arg)) {
+                    owner = Buffer.from(arg).toString('hex');
+                } else if (typeof arg === 'string') {
+                    owner = arg;
+                }
+                break;
+            }
+        }
+
         await this.deploymentStorage.saveDeployment({
             contractAddress,
             contractType,
             deployerSeed: seed.trim(),
             deployedAt: new Date().toISOString(),
+            ...(owner ? { owner } : {}),
         });
 
         const receipt: DeploymentExecutionReceipt = {
@@ -427,12 +457,18 @@ export class MidnightContractAdapter implements IContractGateway {
                         try {
                             const val = (ledgerState as any)[key];
                             if (val !== undefined && typeof val !== 'function') {
-                                decodedLedger[key] = val;
+                                if (typeof val === 'bigint') {
+                                    decodedLedger[key] = val.toString();
+                                } else if (val instanceof Uint8Array || Buffer.isBuffer(val)) {
+                                    decodedLedger[key] = Buffer.from(val).toString('hex');
+                                } else {
+                                    decodedLedger[key] = val;
+                                }
                                 if (key === 'message' && !message && typeof val === 'string') {
                                     message = val;
                                 }
                             }
-                        } catch {}
+                        } catch { }
                     }
                 }
             } catch (e) {

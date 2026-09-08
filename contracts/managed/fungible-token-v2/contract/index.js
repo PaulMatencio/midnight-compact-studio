@@ -60,13 +60,14 @@ export class Contract {
     this.witnesses = witnesses_0;
     this.circuits = {
       initialize: (...args_1) => {
-        if (args_1.length !== 4) {
-          throw new __compactRuntime.CompactError(`initialize: expected 4 arguments (as invoked from Typescript), received ${args_1.length}`);
+        if (args_1.length !== 5) {
+          throw new __compactRuntime.CompactError(`initialize: expected 5 arguments (as invoked from Typescript), received ${args_1.length}`);
         }
         const contextOrig_0 = args_1[0];
-        const name__0 = args_1[1];
-        const symbol__0 = args_1[2];
-        const decimals__0 = args_1[3];
+        const caller_0 = args_1[1];
+        const name__0 = args_1[2];
+        const symbol__0 = args_1[3];
+        const decimals__0 = args_1[4];
         if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
           __compactRuntime.typeError('initialize',
                                      'argument 1 (as invoked from Typescript)',
@@ -74,9 +75,16 @@ export class Contract {
                                      'CircuitContext',
                                      contextOrig_0)
         }
+        if (!(caller_0.buffer instanceof ArrayBuffer && caller_0.BYTES_PER_ELEMENT === 1 && caller_0.length === 32)) {
+          __compactRuntime.typeError('initialize',
+                                     'argument 1 (argument 2 as invoked from Typescript)',
+                                     'fungible-token-v2.compact line 26 char 1',
+                                     'Bytes<32>',
+                                     caller_0)
+        }
         if (!(typeof(decimals__0) === 'bigint' && decimals__0 >= 0n && decimals__0 <= 255n)) {
           __compactRuntime.typeError('initialize',
-                                     'argument 3 (argument 4 as invoked from Typescript)',
+                                     'argument 4 (argument 5 as invoked from Typescript)',
                                      'fungible-token-v2.compact line 26 char 1',
                                      'Uint<0..256>',
                                      decimals__0)
@@ -84,8 +92,8 @@ export class Contract {
         const context = { ...contextOrig_0, gasCost: __compactRuntime.emptyRunningCost() };
         const partialProofData = {
           input: {
-            value: _descriptor_4.toValue(name__0).concat(_descriptor_4.toValue(symbol__0).concat(_descriptor_5.toValue(decimals__0))),
-            alignment: _descriptor_4.alignment().concat(_descriptor_4.alignment().concat(_descriptor_5.alignment()))
+            value: _descriptor_0.toValue(caller_0).concat(_descriptor_4.toValue(name__0).concat(_descriptor_4.toValue(symbol__0).concat(_descriptor_5.toValue(decimals__0)))),
+            alignment: _descriptor_0.alignment().concat(_descriptor_4.alignment().concat(_descriptor_4.alignment().concat(_descriptor_5.alignment())))
           },
           output: undefined,
           publicTranscript: [],
@@ -93,6 +101,7 @@ export class Contract {
         };
         const result_0 = this._initialize_0(context,
                                             partialProofData,
+                                            caller_0,
                                             name__0,
                                             symbol__0,
                                             decimals__0);
@@ -107,7 +116,7 @@ export class Contract {
         if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
           __compactRuntime.typeError('name',
                                      'argument 1 (as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 38 char 1',
+                                     'fungible-token-v2.compact line 40 char 1',
                                      'CircuitContext',
                                      contextOrig_0)
         }
@@ -130,7 +139,7 @@ export class Contract {
         if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
           __compactRuntime.typeError('symbol',
                                      'argument 1 (as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 43 char 1',
+                                     'fungible-token-v2.compact line 45 char 1',
                                      'CircuitContext',
                                      contextOrig_0)
         }
@@ -153,7 +162,7 @@ export class Contract {
         if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
           __compactRuntime.typeError('decimals',
                                      'argument 1 (as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 48 char 1',
+                                     'fungible-token-v2.compact line 50 char 1',
                                      'CircuitContext',
                                      contextOrig_0)
         }
@@ -176,7 +185,7 @@ export class Contract {
         if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
           __compactRuntime.typeError('totalSupply',
                                      'argument 1 (as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 53 char 1',
+                                     'fungible-token-v2.compact line 55 char 1',
                                      'CircuitContext',
                                      contextOrig_0)
         }
@@ -200,14 +209,14 @@ export class Contract {
         if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
           __compactRuntime.typeError('balanceOf',
                                      'argument 1 (as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 58 char 1',
+                                     'fungible-token-v2.compact line 60 char 1',
                                      'CircuitContext',
                                      contextOrig_0)
         }
         if (!(account_0.buffer instanceof ArrayBuffer && account_0.BYTES_PER_ELEMENT === 1 && account_0.length === 32)) {
           __compactRuntime.typeError('balanceOf',
                                      'argument 1 (argument 2 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 58 char 1',
+                                     'fungible-token-v2.compact line 60 char 1',
                                      'Bytes<32>',
                                      account_0)
         }
@@ -235,21 +244,21 @@ export class Contract {
         if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
           __compactRuntime.typeError('allowance',
                                      'argument 1 (as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 66 char 1',
+                                     'fungible-token-v2.compact line 68 char 1',
                                      'CircuitContext',
                                      contextOrig_0)
         }
         if (!(owner_0.buffer instanceof ArrayBuffer && owner_0.BYTES_PER_ELEMENT === 1 && owner_0.length === 32)) {
           __compactRuntime.typeError('allowance',
                                      'argument 1 (argument 2 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 66 char 1',
+                                     'fungible-token-v2.compact line 68 char 1',
                                      'Bytes<32>',
                                      owner_0)
         }
         if (!(spender_0.buffer instanceof ArrayBuffer && spender_0.BYTES_PER_ELEMENT === 1 && spender_0.length === 32)) {
           __compactRuntime.typeError('allowance',
                                      'argument 2 (argument 3 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 66 char 1',
+                                     'fungible-token-v2.compact line 68 char 1',
                                      'Bytes<32>',
                                      spender_0)
         }
@@ -281,28 +290,28 @@ export class Contract {
         if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
           __compactRuntime.typeError('transfer',
                                      'argument 1 (as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 77 char 1',
+                                     'fungible-token-v2.compact line 79 char 1',
                                      'CircuitContext',
                                      contextOrig_0)
         }
         if (!(caller_0.buffer instanceof ArrayBuffer && caller_0.BYTES_PER_ELEMENT === 1 && caller_0.length === 32)) {
           __compactRuntime.typeError('transfer',
                                      'argument 1 (argument 2 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 77 char 1',
+                                     'fungible-token-v2.compact line 79 char 1',
                                      'Bytes<32>',
                                      caller_0)
         }
         if (!(to_0.buffer instanceof ArrayBuffer && to_0.BYTES_PER_ELEMENT === 1 && to_0.length === 32)) {
           __compactRuntime.typeError('transfer',
                                      'argument 2 (argument 3 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 77 char 1',
+                                     'fungible-token-v2.compact line 79 char 1',
                                      'Bytes<32>',
                                      to_0)
         }
         if (!(typeof(value_0) === 'bigint' && value_0 >= 0n && value_0 <= 340282366920938463463374607431768211455n)) {
           __compactRuntime.typeError('transfer',
                                      'argument 3 (argument 4 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 77 char 1',
+                                     'fungible-token-v2.compact line 79 char 1',
                                      'Uint<0..340282366920938463463374607431768211456>',
                                      value_0)
         }
@@ -335,28 +344,28 @@ export class Contract {
         if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
           __compactRuntime.typeError('approve',
                                      'argument 1 (as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 87 char 1',
+                                     'fungible-token-v2.compact line 89 char 1',
                                      'CircuitContext',
                                      contextOrig_0)
         }
         if (!(caller_0.buffer instanceof ArrayBuffer && caller_0.BYTES_PER_ELEMENT === 1 && caller_0.length === 32)) {
           __compactRuntime.typeError('approve',
                                      'argument 1 (argument 2 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 87 char 1',
+                                     'fungible-token-v2.compact line 89 char 1',
                                      'Bytes<32>',
                                      caller_0)
         }
         if (!(spender_0.buffer instanceof ArrayBuffer && spender_0.BYTES_PER_ELEMENT === 1 && spender_0.length === 32)) {
           __compactRuntime.typeError('approve',
                                      'argument 2 (argument 3 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 87 char 1',
+                                     'fungible-token-v2.compact line 89 char 1',
                                      'Bytes<32>',
                                      spender_0)
         }
         if (!(typeof(value_0) === 'bigint' && value_0 >= 0n && value_0 <= 340282366920938463463374607431768211455n)) {
           __compactRuntime.typeError('approve',
                                      'argument 3 (argument 4 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 87 char 1',
+                                     'fungible-token-v2.compact line 89 char 1',
                                      'Uint<0..340282366920938463463374607431768211456>',
                                      value_0)
         }
@@ -390,35 +399,35 @@ export class Contract {
         if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
           __compactRuntime.typeError('transferFrom',
                                      'argument 1 (as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 97 char 1',
+                                     'fungible-token-v2.compact line 99 char 1',
                                      'CircuitContext',
                                      contextOrig_0)
         }
         if (!(caller_0.buffer instanceof ArrayBuffer && caller_0.BYTES_PER_ELEMENT === 1 && caller_0.length === 32)) {
           __compactRuntime.typeError('transferFrom',
                                      'argument 1 (argument 2 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 97 char 1',
+                                     'fungible-token-v2.compact line 99 char 1',
                                      'Bytes<32>',
                                      caller_0)
         }
         if (!(fromAccount_0.buffer instanceof ArrayBuffer && fromAccount_0.BYTES_PER_ELEMENT === 1 && fromAccount_0.length === 32)) {
           __compactRuntime.typeError('transferFrom',
                                      'argument 2 (argument 3 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 97 char 1',
+                                     'fungible-token-v2.compact line 99 char 1',
                                      'Bytes<32>',
                                      fromAccount_0)
         }
         if (!(to_0.buffer instanceof ArrayBuffer && to_0.BYTES_PER_ELEMENT === 1 && to_0.length === 32)) {
           __compactRuntime.typeError('transferFrom',
                                      'argument 3 (argument 4 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 97 char 1',
+                                     'fungible-token-v2.compact line 99 char 1',
                                      'Bytes<32>',
                                      to_0)
         }
         if (!(typeof(value_0) === 'bigint' && value_0 >= 0n && value_0 <= 340282366920938463463374607431768211455n)) {
           __compactRuntime.typeError('transferFrom',
                                      'argument 4 (argument 5 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 97 char 1',
+                                     'fungible-token-v2.compact line 99 char 1',
                                      'Uint<0..340282366920938463463374607431768211456>',
                                      value_0)
         }
@@ -452,28 +461,28 @@ export class Contract {
         if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
           __compactRuntime.typeError('mint',
                                      'argument 1 (as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 109 char 1',
+                                     'fungible-token-v2.compact line 111 char 1',
                                      'CircuitContext',
                                      contextOrig_0)
         }
         if (!(caller_0.buffer instanceof ArrayBuffer && caller_0.BYTES_PER_ELEMENT === 1 && caller_0.length === 32)) {
           __compactRuntime.typeError('mint',
                                      'argument 1 (argument 2 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 109 char 1',
+                                     'fungible-token-v2.compact line 111 char 1',
                                      'Bytes<32>',
                                      caller_0)
         }
         if (!(to_0.buffer instanceof ArrayBuffer && to_0.BYTES_PER_ELEMENT === 1 && to_0.length === 32)) {
           __compactRuntime.typeError('mint',
                                      'argument 2 (argument 3 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 109 char 1',
+                                     'fungible-token-v2.compact line 111 char 1',
                                      'Bytes<32>',
                                      to_0)
         }
         if (!(typeof(value_0) === 'bigint' && value_0 >= 0n && value_0 <= 340282366920938463463374607431768211455n)) {
           __compactRuntime.typeError('mint',
                                      'argument 3 (argument 4 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 109 char 1',
+                                     'fungible-token-v2.compact line 111 char 1',
                                      'Uint<0..340282366920938463463374607431768211456>',
                                      value_0)
         }
@@ -505,21 +514,21 @@ export class Contract {
         if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
           __compactRuntime.typeError('burn',
                                      'argument 1 (as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 120 char 1',
+                                     'fungible-token-v2.compact line 122 char 1',
                                      'CircuitContext',
                                      contextOrig_0)
         }
         if (!(caller_0.buffer instanceof ArrayBuffer && caller_0.BYTES_PER_ELEMENT === 1 && caller_0.length === 32)) {
           __compactRuntime.typeError('burn',
                                      'argument 1 (argument 2 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 120 char 1',
+                                     'fungible-token-v2.compact line 122 char 1',
                                      'Bytes<32>',
                                      caller_0)
         }
         if (!(typeof(value_0) === 'bigint' && value_0 >= 0n && value_0 <= 340282366920938463463374607431768211455n)) {
           __compactRuntime.typeError('burn',
                                      'argument 2 (argument 3 as invoked from Typescript)',
-                                     'fungible-token-v2.compact line 120 char 1',
+                                     'fungible-token-v2.compact line 122 char 1',
                                      'Uint<0..340282366920938463463374607431768211456>',
                                      value_0)
         }
@@ -775,7 +784,13 @@ export class Contract {
       currentZswapLocalState: context.currentZswapLocalState
     }
   }
-  _initialize_0(context, partialProofData, name__0, symbol__0, decimals__0) {
+  _initialize_0(context,
+                partialProofData,
+                caller_0,
+                name__0,
+                symbol__0,
+                decimals__0)
+  {
     __compactRuntime.assert(!_descriptor_1.fromValue(__compactRuntime.queryLedgerState(context,
                                                                                        partialProofData,
                                                                                        [
@@ -789,6 +804,20 @@ export class Contract {
                                                                                         { popeq: { cached: false,
                                                                                                    result: undefined } }]).value),
                             'FungibleToken: contract already initialized');
+    __compactRuntime.assert(this._equal_0(caller_0,
+                                          _descriptor_0.fromValue(__compactRuntime.queryLedgerState(context,
+                                                                                                    partialProofData,
+                                                                                                    [
+                                                                                                     { dup: { n: 0 } },
+                                                                                                     { idx: { cached: false,
+                                                                                                              pushPath: false,
+                                                                                                              path: [
+                                                                                                                     { tag: 'value',
+                                                                                                                       value: { value: _descriptor_5.toValue(7n),
+                                                                                                                                alignment: _descriptor_5.alignment() } }] } },
+                                                                                                     { popeq: { cached: false,
+                                                                                                                result: undefined } }]).value)),
+                            'FungibleToken: caller is not the owner');
     __compactRuntime.queryLedgerState(context,
                                       partialProofData,
                                       [
@@ -1144,7 +1173,7 @@ export class Contract {
                                                                                        { popeq: { cached: false,
                                                                                                   result: undefined } }]).value),
                             'FungibleToken: contract not initialized');
-    __compactRuntime.assert(this._equal_0(caller_0,
+    __compactRuntime.assert(this._equal_1(caller_0,
                                           _descriptor_0.fromValue(__compactRuntime.queryLedgerState(context,
                                                                                                     partialProofData,
                                                                                                     [
@@ -1175,7 +1204,7 @@ export class Contract {
                                                                                        { popeq: { cached: false,
                                                                                                   result: undefined } }]).value),
                             'FungibleToken: contract not initialized');
-    __compactRuntime.assert(this._equal_1(caller_0,
+    __compactRuntime.assert(this._equal_2(caller_0,
                                           _descriptor_0.fromValue(__compactRuntime.queryLedgerState(context,
                                                                                                     partialProofData,
                                                                                                     [
@@ -1251,7 +1280,7 @@ export class Contract {
                               'FungibleToken: arithmetic overflow');
       const tmp_0 = ((t1) => {
                       if (t1 > 340282366920938463463374607431768211455n) {
-                        throw new __compactRuntime.CompactError('fungible-token-v2.compact line 150 char 20: cast from Field or Uint value to smaller Uint value failed: ' + t1 + ' is greater than 340282366920938463463374607431768211455');
+                        throw new __compactRuntime.CompactError('fungible-token-v2.compact line 152 char 20: cast from Field or Uint value to smaller Uint value failed: ' + t1 + ' is greater than 340282366920938463463374607431768211455');
                       }
                       return t1;
                     })(_descriptor_2.fromValue(__compactRuntime.queryLedgerState(context,
@@ -1339,7 +1368,7 @@ export class Contract {
       const toBal_0 = this._balanceOf_0(context, partialProofData, to_0);
       const tmp_3 = ((t1) => {
                       if (t1 > 340282366920938463463374607431768211455n) {
-                        throw new __compactRuntime.CompactError('fungible-token-v2.compact line 161 char 36: cast from Field or Uint value to smaller Uint value failed: ' + t1 + ' is greater than 340282366920938463463374607431768211455');
+                        throw new __compactRuntime.CompactError('fungible-token-v2.compact line 163 char 36: cast from Field or Uint value to smaller Uint value failed: ' + t1 + ' is greater than 340282366920938463463374607431768211455');
                       }
                       return t1;
                     })(toBal_0 + value_0);
@@ -1573,7 +1602,7 @@ export class Contract {
     }
     return [];
   }
-  _isZeroKey_0(key_0) { return this._equal_2(key_0, new Uint8Array(32)); }
+  _isZeroKey_0(key_0) { return this._equal_3(key_0, new Uint8Array(32)); }
   _zeroKey_0() { return new Uint8Array(32); }
   _equal_0(x0, y0) {
     if (!x0.every((x, i) => y0[i] === x)) { return false; }
@@ -1584,6 +1613,10 @@ export class Contract {
     return true;
   }
   _equal_2(x0, y0) {
+    if (!x0.every((x, i) => y0[i] === x)) { return false; }
+    return true;
+  }
+  _equal_3(x0, y0) {
     if (!x0.every((x, i) => y0[i] === x)) { return false; }
     return true;
   }

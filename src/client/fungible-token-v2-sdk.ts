@@ -1,10 +1,8 @@
 /**
  * FungibleTokenV2 TypeScript Client SDK
- *
- * Implements high-level bindings and type-safe circuit wrappers for
- * the fungible-token-v2 Midnight smart contract.
- *
- * File location: src/client/fungible-token-v2-sdk.ts
+ * 
+ * Provides type-safe wrappers for circuit execution, constructor initial state setup,
+ * and ledger state query deserialization for the fungible-token-v2 smart contract.
  */
 
 import {
@@ -26,238 +24,240 @@ import {
 } from '../../contracts/managed/fungible-token-v2/contract/index.js';
 
 /**
- * Base interface representing the client private state.
+ * Standard private state structure maintained on the client.
  */
 export interface FungibleTokenV2PrivateState {
-  readonly [key: string]: unknown;
+  readonly userSecretKey?: Uint8Array;
+  readonly metadata?: Record<string, unknown>;
 }
 
 /**
- * Type representing the on-chain ledger state of the Fungible Token contract.
+ * Public ledger state mapping representing the on-chain contract state.
  */
 export type FungibleTokenV2LedgerState = ContractLedger;
 
 /**
- * Type representing witness functions required by the contract.
- * Each witness returns a tuple [nextPrivateState, ReturnValue].
+ * Custom witness definitions interface for FungibleTokenV2.
+ * Parameterized by the private state type `PS`.
  */
-export type FungibleTokenV2Witnesses<PS extends FungibleTokenV2PrivateState = FungibleTokenV2PrivateState> = {
-  [K in keyof ContractWitnesses<PS>]: (
-    context: WitnessContext<ContractLedger, PS>,
-    ...args: any[]
-  ) => [PS, any];
-};
+export type FungibleTokenV2Witnesses<PS> = ContractWitnesses<PS>;
 
 /**
- * Production Client SDK for interacting with the FungibleTokenV2 Compact smart contract.
+ * Helper to convert a hexadecimal string to Uint8Array (Bytes<32>).
  */
-export class FungibleTokenV2Client<PS extends FungibleTokenV2PrivateState = FungibleTokenV2PrivateState> {
+export function hexToUint8Array(hex: string): Uint8Array {
+  const cleanHex = hex.startsWith('0x') ? hex.slice(2) : hex;
+  if (cleanHex.length % 2 !== 0) {
+    throw new Error(`Invalid hex string length: ${cleanHex.length}`);
+  }
+  const array = new Uint8Array(cleanHex.length / 2);
+  for (let i = 0; i < cleanHex.length; i += 2) {
+    array[i / 2] = parseInt(cleanHex.substring(i, i + 2), 16);
+  }
+  return array;
+}
+
+/**
+ * Helper to convert a Uint8Array to a hex string.
+ */
+export function uint8ArrayToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * Production Client SDK for the FungibleTokenV2 Midnight smart contract.
+ */
+export class FungibleTokenV2Client<PS = FungibleTokenV2PrivateState> {
   private readonly contract: ManagedContract<PS>;
 
   /**
-   * Constructs a new FungibleTokenV2 client instance.
-   *
-   * @param witnesses Optional witness implementation object for off-chain execution.
+   * Constructs an instance of the FungibleTokenV2Client.
+   * @param witnesses Optional custom witness implementation dictionary.
    */
   constructor(witnesses: FungibleTokenV2Witnesses<PS> = {} as FungibleTokenV2Witnesses<PS>) {
-    this.contract = new ManagedContract<PS>(witnesses as unknown as ContractWitnesses<PS>);
+    this.contract = new ManagedContract<PS>(witnesses);
   }
 
   /**
-   * Initializes the contract's constructor context and default ledger state.
+   * Initializes the initial contract state and constructor result.
    *
-   * @param context The constructor context containing the initial owner and coin public key.
-   * @returns The constructor result containing the initial state data and private state.
+   * @param context Constructor context containing private state and public coin key.
+   * @param initialOwner 32-byte public key of the initial contract owner.
+   * @returns The initial ConstructorResult containing currentContractState and currentPrivateState.
    */
-  public initialState(context: ConstructorContext<PS>, initialOwner: Uint8Array = new Uint8Array(32)): ConstructorResult<PS> {
+  public initialState(
+    context: ConstructorContext<PS>,
+    initialOwner: Uint8Array
+  ): ConstructorResult<PS> {
+    if (initialOwner.length !== 32) {
+      throw new Error(`initialOwner must be 32 bytes, received ${initialOwner.length} bytes.`);
+    }
     return this.contract.initialState(context, initialOwner);
   }
 
   /**
-   * Initializes token metadata: name, symbol, and decimal precision.
+   * Initializes token metadata (name, symbol, decimals).
+   * Callable only once by the contract owner.
    *
    * @param context Circuit execution context.
-   * @param name Token name string.
-   * @param symbol Token ticker symbol string.
-   * @param decimals Token precision (Uint8 represented as bigint).
-   * @returns Circuit result with an empty tuple [] return value.
+   * @param caller 32-byte address of the caller (must match owner).
+   * @param name Token name.
+   * @param symbol Token symbol.
+   * @param decimals Token decimal precision (Uint8).
    */
   public initialize(
     context: CircuitContext<PS>,
+    caller: Uint8Array,
     name: string,
     symbol: string,
-    decimals: bigint,
+    decimals: bigint
   ): CircuitResults<PS, []> {
-    return this.contract.circuits.initialize(context, name, symbol, decimals);
+    this.assertBytes32(caller, 'caller');
+    return this.contract.circuits.initialize(context, caller, name, symbol, decimals);
   }
 
   /**
-   * Retrieves the token name from the contract state.
-   *
-   * @param context Circuit execution context.
-   * @returns Circuit result containing the token name string.
+   * Queries the token name via zero-knowledge circuit execution.
    */
   public name(context: CircuitContext<PS>): CircuitResults<PS, string> {
     return this.contract.circuits.name(context);
   }
 
   /**
-   * Retrieves the token symbol from the contract state.
-   *
-   * @param context Circuit execution context.
-   * @returns Circuit result containing the token symbol string.
+   * Queries the token symbol via zero-knowledge circuit execution.
    */
   public symbol(context: CircuitContext<PS>): CircuitResults<PS, string> {
     return this.contract.circuits.symbol(context);
   }
 
   /**
-   * Retrieves the token decimal precision from the contract state.
-   *
-   * @param context Circuit execution context.
-   * @returns Circuit result containing the token decimals (bigint).
+   * Queries token decimals via zero-knowledge circuit execution.
    */
   public decimals(context: CircuitContext<PS>): CircuitResults<PS, bigint> {
     return this.contract.circuits.decimals(context);
   }
 
   /**
-   * Retrieves the total circulating supply from the contract state.
-   *
-   * @param context Circuit execution context.
-   * @returns Circuit result containing the total supply (bigint).
+   * Queries the total token supply.
    */
   public totalSupply(context: CircuitContext<PS>): CircuitResults<PS, bigint> {
     return this.contract.circuits.totalSupply(context);
   }
 
   /**
-   * Queries the token balance for a specified account.
-   *
-   * @param context Circuit execution context.
-   * @param account 32-byte account public key address.
-   * @returns Circuit result containing the balance (bigint).
+   * Queries the token balance of a given 32-byte account address.
    */
   public balanceOf(
     context: CircuitContext<PS>,
-    account: Uint8Array,
+    account: Uint8Array
   ): CircuitResults<PS, bigint> {
+    this.assertBytes32(account, 'account');
     return this.contract.circuits.balanceOf(context, account);
   }
 
   /**
-   * Queries the spending allowance granted to a spender by an owner.
-   *
-   * @param context Circuit execution context.
-   * @param owner 32-byte owner account public key address.
-   * @param spender 32-byte spender account public key address.
-   * @returns Circuit result containing the allowance (bigint).
+   * Queries the allowance granted by `owner` to `spender`.
    */
   public allowance(
     context: CircuitContext<PS>,
     owner: Uint8Array,
-    spender: Uint8Array,
+    spender: Uint8Array
   ): CircuitResults<PS, bigint> {
+    this.assertBytes32(owner, 'owner');
+    this.assertBytes32(spender, 'spender');
     return this.contract.circuits.allowance(context, owner, spender);
   }
 
   /**
-   * Transfers tokens from caller to recipient.
-   *
-   * @param context Circuit execution context.
-   * @param caller 32-byte caller account public key address.
-   * @param to 32-byte destination account public key address.
-   * @param value Amount to transfer (Uint128 represented as bigint).
-   * @returns Circuit result containing boolean success flag.
+   * Transfers `value` tokens from `caller` to `to`.
    */
   public transfer(
     context: CircuitContext<PS>,
     caller: Uint8Array,
     to: Uint8Array,
-    value: bigint,
+    value: bigint
   ): CircuitResults<PS, boolean> {
+    this.assertBytes32(caller, 'caller');
+    this.assertBytes32(to, 'to');
     return this.contract.circuits.transfer(context, caller, to, value);
   }
 
   /**
-   * Approves a spender to spend up to a maximum amount of tokens on behalf of caller.
-   *
-   * @param context Circuit execution context.
-   * @param caller 32-byte caller account public key address.
-   * @param spender 32-byte spender account public key address.
-   * @param value Amount approved (Uint128 represented as bigint).
-   * @returns Circuit result containing boolean success flag.
+   * Approves `spender` to spend `value` tokens on behalf of `caller`.
    */
   public approve(
     context: CircuitContext<PS>,
     caller: Uint8Array,
     spender: Uint8Array,
-    value: bigint,
+    value: bigint
   ): CircuitResults<PS, boolean> {
+    this.assertBytes32(caller, 'caller');
+    this.assertBytes32(spender, 'spender');
     return this.contract.circuits.approve(context, caller, spender, value);
   }
 
   /**
-   * Transfers tokens from fromAccount to to using caller's pre-approved allowance.
-   *
-   * @param context Circuit execution context.
-   * @param caller 32-byte spender/caller account public key address.
-   * @param fromAccount 32-byte owner account public key address.
-   * @param to 32-byte destination account public key address.
-   * @param value Amount to transfer (Uint128 represented as bigint).
-   * @returns Circuit result containing boolean success flag.
+   * Performs an allowance-based transfer from `fromAccount` to `to`.
    */
   public transferFrom(
     context: CircuitContext<PS>,
     caller: Uint8Array,
     fromAccount: Uint8Array,
     to: Uint8Array,
-    value: bigint,
+    value: bigint
   ): CircuitResults<PS, boolean> {
+    this.assertBytes32(caller, 'caller');
+    this.assertBytes32(fromAccount, 'fromAccount');
+    this.assertBytes32(to, 'to');
     return this.contract.circuits.transferFrom(context, caller, fromAccount, to, value);
   }
 
   /**
-   * Mints new tokens to the destination account (owner only).
-   *
-   * @param context Circuit execution context.
-   * @param caller 32-byte caller account public key address (must match owner).
-   * @param to 32-byte destination account public key address.
-   * @param value Amount to mint (Uint128 represented as bigint).
-   * @returns Circuit result containing boolean success flag.
+   * Mints `value` tokens to `to`. Requires `caller` to be the contract owner.
    */
   public mint(
     context: CircuitContext<PS>,
     caller: Uint8Array,
     to: Uint8Array,
-    value: bigint,
+    value: bigint
   ): CircuitResults<PS, boolean> {
+    this.assertBytes32(caller, 'caller');
+    this.assertBytes32(to, 'to');
     return this.contract.circuits.mint(context, caller, to, value);
   }
 
   /**
-   * Burns tokens from the caller's account and decreases total supply (owner only).
-   *
-   * @param context Circuit execution context.
-   * @param caller 32-byte caller account public key address (must match owner).
-   * @param value Amount to burn (Uint128 represented as bigint).
-   * @returns Circuit result containing boolean success flag.
+   * Burns `value` tokens from `caller`. Requires `caller` to be the contract owner.
    */
   public burn(
     context: CircuitContext<PS>,
     caller: Uint8Array,
-    value: bigint,
+    value: bigint
   ): CircuitResults<PS, boolean> {
+    this.assertBytes32(caller, 'caller');
     return this.contract.circuits.burn(context, caller, value);
   }
 
   /**
-   * Decodes and parses raw on-chain state data into the strongly-typed ledger state.
+   * Deserializes raw contract ledger state into a strongly-typed FungibleTokenV2LedgerState.
    *
-   * @param rawState Raw state value or charged state returned by query or execution context.
-   * @returns Strongly-typed FungibleTokenV2LedgerState object with Map accessors.
+   * @param rawState Raw state value or ChargedState object from the query context / indexer.
+   * @returns Typed on-chain ledger representation.
    */
-  public queryLedgerStateFromRaw(rawState: StateValue | ChargedState | unknown): FungibleTokenV2LedgerState {
+  public queryLedgerStateFromRaw(
+    rawState: StateValue | ChargedState | unknown
+  ): FungibleTokenV2LedgerState {
     return ledger(rawState as StateValue | ChargedState);
+  }
+
+  /**
+   * Validates that an address parameter is exactly 32 bytes.
+   */
+  private assertBytes32(bytes: Uint8Array, fieldName: string): void {
+    if (!bytes || bytes.length !== 32) {
+      throw new Error(`Field '${fieldName}' must be a 32-byte Uint8Array. Received ${bytes?.length ?? 0} bytes.`);
+    }
   }
 }

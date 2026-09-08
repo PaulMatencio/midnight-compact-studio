@@ -26,7 +26,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
-        const { contractAddress, contractType = 'hello-world', nickname, deployerSeed, network = 'preprod' } = body;
+        const { contractAddress, contractType = 'hello-world', nickname, deployerSeed, network = 'preprod', owner } = body;
 
         if (!contractAddress || typeof contractAddress !== 'string' || contractAddress.trim().length === 0) {
             return NextResponse.json({ success: false, error: 'Contract address is required.' }, { status: 400 });
@@ -39,6 +39,7 @@ export async function POST(req: NextRequest) {
             deployerSeed: deployerSeed?.trim() || undefined,
             network,
             deployedAt: new Date().toISOString(),
+            owner: owner?.trim() || undefined,
         };
 
         await container.deploymentStorage.saveDeployment(record);

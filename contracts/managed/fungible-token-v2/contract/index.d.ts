@@ -5,6 +5,7 @@ export type Witnesses<PS> = {
 
 export type ImpureCircuits<PS> = {
   initialize(context: __compactRuntime.CircuitContext<PS>,
+             caller_0: Uint8Array,
              name__0: string,
              symbol__0: string,
              decimals__0: bigint): __compactRuntime.CircuitResults<PS, []>;
@@ -40,6 +41,7 @@ export type ImpureCircuits<PS> = {
 
 export type ProvableCircuits<PS> = {
   initialize(context: __compactRuntime.CircuitContext<PS>,
+             caller_0: Uint8Array,
              name__0: string,
              symbol__0: string,
              decimals__0: bigint): __compactRuntime.CircuitResults<PS, []>;
@@ -78,6 +80,7 @@ export type PureCircuits = {
 
 export type Circuits<PS> = {
   initialize(context: __compactRuntime.CircuitContext<PS>,
+             caller_0: Uint8Array,
              name__0: string,
              symbol__0: string,
              decimals__0: bigint): __compactRuntime.CircuitResults<PS, []>;

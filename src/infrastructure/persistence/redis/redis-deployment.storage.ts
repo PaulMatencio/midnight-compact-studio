@@ -29,6 +29,7 @@ export class RedisDeploymentStorage implements IDeploymentStorage {
                     seed: item.deployerSeed || item.seed,
                     network: item.network || 'preprod',
                     deployedAt: item.deployedAt || new Date().toISOString(),
+                    owner: item.owner,
                 }));
             }
             if (data && typeof data === 'object' && (data as any).contractAddress) {
@@ -42,6 +43,7 @@ export class RedisDeploymentStorage implements IDeploymentStorage {
                         seed: item.deployerSeed || item.seed,
                         network: item.network || 'preprod',
                         deployedAt: item.deployedAt || new Date().toISOString(),
+                        owner: item.owner,
                     },
                 ];
             }
@@ -80,6 +82,7 @@ export class RedisDeploymentStorage implements IDeploymentStorage {
                 deployerSeed: record.deployerSeed || (record as any).seed,
                 network: record.network || 'preprod',
                 deployedAt: record.deployedAt || new Date().toISOString(),
+                owner: (record as any).owner,
             };
 
             const filtered = deployments.filter((d) => d.contractAddress.toLowerCase() !== normalized.contractAddress.toLowerCase());

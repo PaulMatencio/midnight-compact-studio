@@ -24,11 +24,13 @@ constructor(initialOwner: Bytes<32>) {
 }
 
 export circuit initialize(
+                 caller: Bytes<32>,
                  name_: Opaque<"string">,
                  symbol_: Opaque<"string">,
                  decimals_: Uint<8>
                  ): [] {
   assert(!_isInitialized, "FungibleToken: contract already initialized");
+  assert(disclose(caller) == owner, "FungibleToken: caller is not the owner");
   _isInitialized = true;
   _name = disclose(name_);
   _symbol = disclose(symbol_);

@@ -78,8 +78,8 @@ describe('FungibleTokenV2 Contract', () => {
   });
 
   describe('Initialization', () => {
-    it('should correctly initialize token metadata', () => {
-      runCircuit(contract.circuits.initialize, TOKEN_NAME, TOKEN_SYMBOL, TOKEN_DECIMALS);
+    it('should correctly initialize token metadata when called by owner', () => {
+      runCircuit(contract.circuits.initialize, OWNER, TOKEN_NAME, TOKEN_SYMBOL, TOKEN_DECIMALS);
 
       const name = runCircuit(contract.circuits.name);
       const symbol = runCircuit(contract.circuits.symbol);
@@ -96,18 +96,24 @@ describe('FungibleTokenV2 Contract', () => {
       expect(state.owner).toEqual(OWNER);
     });
 
+    it('should fail when a non-owner attempts to initialize', () => {
+      expect(() => {
+        runCircuit(contract.circuits.initialize, ALICE, TOKEN_NAME, TOKEN_SYMBOL, TOKEN_DECIMALS);
+      }).toThrow('FungibleToken: caller is not the owner');
+    });
+
     it('should fail if initialized more than once', () => {
-      runCircuit(contract.circuits.initialize, TOKEN_NAME, TOKEN_SYMBOL, TOKEN_DECIMALS);
+      runCircuit(contract.circuits.initialize, OWNER, TOKEN_NAME, TOKEN_SYMBOL, TOKEN_DECIMALS);
 
       expect(() => {
-        runCircuit(contract.circuits.initialize, TOKEN_NAME, TOKEN_SYMBOL, TOKEN_DECIMALS);
+        runCircuit(contract.circuits.initialize, OWNER, TOKEN_NAME, TOKEN_SYMBOL, TOKEN_DECIMALS);
       }).toThrow('FungibleToken: contract already initialized');
     });
   });
 
   describe('When Initialized', () => {
     beforeEach(() => {
-      runCircuit(contract.circuits.initialize, TOKEN_NAME, TOKEN_SYMBOL, TOKEN_DECIMALS);
+      runCircuit(contract.circuits.initialize, OWNER, TOKEN_NAME, TOKEN_SYMBOL, TOKEN_DECIMALS);
     });
 
     describe('Minting', () => {

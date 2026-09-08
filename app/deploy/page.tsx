@@ -32,7 +32,7 @@ import type { TxRecord } from '@/src/types/tx';
 type DeployStage = 'idle' | 'preparing' | 'proving' | 'submitting' | 'confirmed' | 'error';
 
 export default function DeployPage() {
-    const { seed, walletStatus, fetchWalletStatus } = useWallet();
+    const { seed, walletStatus, fetchWalletStatus, isExtensionConnected, extensionAddress } = useWallet();
     const { systemHealth, fetchSystemHealth, setActiveContractAddress } = useSystem();
     const { transactions, addTransaction, fetchTransactions } = useTransactions();
     const toast = useToast();
@@ -69,7 +69,13 @@ export default function DeployPage() {
         const initial: Record<string, string> = {};
         for (const param of selectedBlueprint.constructorParams) {
             if (param.defaultValue === 'deployer') {
-                initial[param.name] = walletStatus?.coinPublicKey || 'deployer';
+                if (isExtensionConnected && extensionAddress) {
+                    initial[param.name] = extensionAddress;
+                } else if (walletStatus?.unshieldedAddress) {
+                    initial[param.name] = walletStatus.unshieldedAddress;
+                } else {
+                    initial[param.name] = '';
+                }
             } else if (param.defaultValue !== undefined) {
                 initial[param.name] = String(param.defaultValue);
             } else {
@@ -77,7 +83,7 @@ export default function DeployPage() {
             }
         }
         setConstructorArgs(initial);
-    }, [selectedBlueprint, walletStatus?.coinPublicKey]);
+    }, [selectedBlueprint, isExtensionConnected, extensionAddress, walletStatus?.unshieldedAddress]);
 
     const isSynced = walletStatus?.isSynced ?? false;
     const syncPercentage = walletStatus?.syncProgress?.percentage ?? 0;
@@ -384,19 +390,37 @@ export default function DeployPage() {
                                                         </code>
                                                         {param.required && <span className="text-rose-400">*</span>}
                                                     </label>
-                                                    {isAddressType && walletStatus?.coinPublicKey && (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() =>
-                                                                setConstructorArgs((prev) => ({
-                                                                    ...prev,
-                                                                    [param.name]: walletStatus.coinPublicKey!,
-                                                                }))
-                                                            }
-                                                            className="text-[10px] font-medium text-cyan-400 hover:text-cyan-300 underline cursor-pointer"
-                                                        >
-                                                            Use My Wallet Key
-                                                        </button>
+                                                    {isAddressType && (
+                                                        <div className="flex items-center space-x-2">
+                                                            {isExtensionConnected && extensionAddress && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() =>
+                                                                        setConstructorArgs((prev) => ({
+                                                                            ...prev,
+                                                                            [param.name]: extensionAddress,
+                                                                        }))
+                                                                    }
+                                                                    className="text-[10px] font-semibold text-emerald-400 hover:text-emerald-300 underline cursor-pointer"
+                                                                >
+                                                                    Use Connected Lace Address
+                                                                </button>
+                                                            )}
+                                                            {walletStatus?.unshieldedAddress && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() =>
+                                                                        setConstructorArgs((prev) => ({
+                                                                            ...prev,
+                                                                            [param.name]: walletStatus.unshieldedAddress,
+                                                                        }))
+                                                                    }
+                                                                    className="text-[10px] font-medium text-cyan-400 hover:text-cyan-300 underline cursor-pointer"
+                                                                >
+                                                                    Use Studio Address
+                                                                </button>
+                                                            )}
+                                                        </div>
                                                     )}
                                                 </div>
                                                 <input
@@ -413,7 +437,7 @@ export default function DeployPage() {
                                                 />
                                                 {isAddressType && (
                                                     <p className="text-[10px] text-slate-500">
-                                                        Leave empty or &quot;deployer&quot; to automatically use your wallet&apos;s 32-byte public key.
+                                                        Enter your Lace unshielded address (<code>mn_addr_preprod1...</code>) or 32-byte hex to be the contract owner.
                                                     </p>
                                                 )}
                                             </div>

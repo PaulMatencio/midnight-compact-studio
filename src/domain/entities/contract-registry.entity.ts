@@ -46,4 +46,5 @@ export interface DeployedContractRecord {
     seed?: string;
     network?: string;
     deployedAt: string;
+    owner?: string;
 }

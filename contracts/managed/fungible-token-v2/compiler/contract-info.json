@@ -9,6 +9,13 @@
       "proof": true,
       "arguments": [
         {
+          "name": "caller",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
           "name": "name_",
           "type": {
             "type-name": "Opaque",

@@ -5,136 +5,138 @@
  *   npx tsx examples/fungible-token-v2-example.ts
  */
 
-import * as CompactRuntime from '@midnight-ntwrk/compact-runtime';
+import { CompactRuntime } from '@midnight-ntwrk/compact-runtime';
 import {
   FungibleTokenV2Client,
   type FungibleTokenV2PrivateState,
+  hexToUint8Array,
+  uint8ArrayToHex,
 } from '../src/client/fungible-token-v2-sdk.js';
 
-function createMockBytes32(byteVal: number): Uint8Array {
-  const arr = new Uint8Array(32);
-  arr.fill(byteVal);
-  return arr;
-}
+async function main() {
+  console.log('=== FungibleTokenV2 SDK Walkthrough ===\n');
 
-async function main(): Promise<void> {
-  console.log('--- Initializing FungibleTokenV2 Client ---');
-
-  // Initialize SDK Client
-  const client = new FungibleTokenV2Client<FungibleTokenV2PrivateState>();
-
-  // Setup mock addresses & keys (32-byte hex strings in Midnight.js runtime)
+  // 1. Setup mock keys (32-byte hex strings for Midnight.js runtime contexts)
   const coinPublicKey = '01'.repeat(32);
   const contractAddress = '00'.repeat(32);
 
-  const ownerBytes = createMockBytes32(1);
-  const aliceBytes = createMockBytes32(2);
-  const bobBytes = createMockBytes32(3);
+  // Setup account byte representations (Uint8Array for contract circuits)
+  const ownerBytes = hexToUint8Array('aa'.repeat(32));
+  const aliceBytes = hexToUint8Array('bb'.repeat(32));
+  const bobBytes = hexToUint8Array('cc'.repeat(32));
 
-  let privateState: FungibleTokenV2PrivateState = {};
+  // 2. Initialize private state & instantiate SDK client
+  let privateState: FungibleTokenV2PrivateState = {
+    userSecretKey: hexToUint8Array('11'.repeat(32)),
+  };
 
-  // 1. Initialize Contract State via ConstructorContext
-  console.log('\n[1] Executing Contract Constructor...');
-  const constructorCtx = CompactRuntime.createConstructorContext(
-    ownerBytes,
-    privateState,
-    coinPublicKey,
-  );
+  const client = new FungibleTokenV2Client<FungibleTokenV2PrivateState>();
 
-  const initResult = client.initialState(constructorCtx);
-  let currentChargedState = initResult.currentContractState.data;
+  // 3. Initialize Contract via Constructor Context
+  console.log('1. Deploying / Initializing contract state...');
+  const constructorCtx = CompactRuntime.createConstructorContext(privateState, coinPublicKey);
+  const initResult = client.initialState(constructorCtx, ownerBytes);
+
   privateState = initResult.currentPrivateState;
+  let currentChargedState = initResult.currentContractState.data;
 
-  console.log('Contract constructor successfully executed.');
+  // Inspect initial ledger
+  let ledgerState = client.queryLedgerStateFromRaw(currentChargedState);
+  console.log(`   Owner: 0x${uint8ArrayToHex(ledgerState.owner)}`);
+  console.log(`   Initialized: ${ledgerState._isInitialized}`);
 
-  // 2. Initialize Token Metadata (initialize circuit)
-  console.log('\n[2] Initializing Token Metadata...');
+  // 4. Initialize token metadata (owner only)
+  console.log('\n2. Initializing token metadata (Midnight DUST, Symbol: DUST, Decimals: 6)...');
   let circuitCtx = CompactRuntime.createCircuitContext(
     contractAddress,
     coinPublicKey,
     currentChargedState,
-    privateState,
+    privateState
   );
+  
+  let result = client.initialize(circuitCtx, ownerBytes, 'Midnight DUST', 'DUST', 6n);
+  privateState = result.context.currentPrivateState;
+  currentChargedState = result.context.currentQueryContext.state;
 
-  const initCircuitResult = client.initialize(
-    circuitCtx,
-    'Midnight Sample Token',
-    'MST',
-    18n,
-  );
-  currentChargedState = initCircuitResult.context.currentQueryContext.state;
-  privateState = initCircuitResult.context.privateState;
-  console.log('Token initialized: Midnight Sample Token (MST), 18 decimals');
+  ledgerState = client.queryLedgerStateFromRaw(currentChargedState);
+  console.log(`   Token Name:     ${ledgerState._name}`);
+  console.log(`   Token Symbol:   ${ledgerState._symbol}`);
+  console.log(`   Token Decimals: ${ledgerState._decimals}`);
 
-  // 3. Mint Tokens to Alice (Caller = Owner)
-  console.log('\n[3] Minting 1,000 MST to Alice...');
+  // 5. Mint tokens to Alice
+  console.log('\n3. Minting 1,000,000 DUST tokens to Alice...');
   circuitCtx = CompactRuntime.createCircuitContext(
     contractAddress,
     coinPublicKey,
     currentChargedState,
-    privateState,
+    privateState
   );
 
-  const mintResult = client.mint(circuitCtx, ownerBytes, aliceBytes, 1000n * 10n ** 18n);
+  const mintAmount = 1_000_000n;
+  const mintResult = client.mint(circuitCtx, ownerBytes, aliceBytes, mintAmount);
+  privateState = mintResult.context.currentPrivateState;
   currentChargedState = mintResult.context.currentQueryContext.state;
-  privateState = mintResult.context.privateState;
-  console.log(`Mint successful: ${mintResult.result}`);
 
-  // 4. Alice Approves Bob to spend 250 MST
-  console.log('\n[4] Alice Approving Bob for 250 MST...');
+  // 6. Query Alice's Balance
   circuitCtx = CompactRuntime.createCircuitContext(
     contractAddress,
     coinPublicKey,
     currentChargedState,
-    privateState,
+    privateState
+  );
+  const aliceBalanceResult = client.balanceOf(circuitCtx, aliceBytes);
+  console.log(`   Alice Balance: ${aliceBalanceResult.result} DUST`);
+
+  // 7. Alice transfers 250,000 DUST to Bob
+  console.log('\n4. Alice transfers 250,000 DUST to Bob...');
+  circuitCtx = CompactRuntime.createCircuitContext(
+    contractAddress,
+    coinPublicKey,
+    currentChargedState,
+    privateState
   );
 
-  const approveResult = client.approve(
-    circuitCtx,
-    aliceBytes,
-    bobBytes,
-    250n * 10n ** 18n,
+  const transferAmount = 250_000n;
+  const transferResult = client.transfer(circuitCtx, aliceBytes, bobBytes, transferAmount);
+  privateState = transferResult.context.currentPrivateState;
+  currentChargedState = transferResult.context.currentQueryContext.state;
+
+  // 8. Bob approves Alice to spend 50,000 DUST
+  console.log('\n5. Bob approves Alice for 50,000 DUST allowance...');
+  circuitCtx = CompactRuntime.createCircuitContext(
+    contractAddress,
+    coinPublicKey,
+    currentChargedState,
+    privateState
   );
+  const allowanceAmount = 50_000n;
+  const approveResult = client.approve(circuitCtx, bobBytes, aliceBytes, allowanceAmount);
+  privateState = approveResult.context.currentPrivateState;
   currentChargedState = approveResult.context.currentQueryContext.state;
-  privateState = approveResult.context.privateState;
-  console.log(`Approve successful: ${approveResult.result}`);
 
-  // 5. Bob transfers 100 MST from Alice to Owner
-  console.log('\n[5] Bob Executing transferFrom(Alice -> Owner, 100 MST)...');
+  // 9. Alice transfers 20,000 DUST from Bob to Alice via transferFrom
+  console.log('\n6. Alice executes transferFrom(Bob -> Alice, 20,000)...');
   circuitCtx = CompactRuntime.createCircuitContext(
     contractAddress,
     coinPublicKey,
     currentChargedState,
-    privateState,
+    privateState
   );
-
-  const transferFromResult = client.transferFrom(
-    circuitCtx,
-    bobBytes,
-    aliceBytes,
-    ownerBytes,
-    100n * 10n ** 18n,
-  );
+  const transferFromResult = client.transferFrom(circuitCtx, aliceBytes, bobBytes, aliceBytes, 20_000n);
+  privateState = transferFromResult.context.currentPrivateState;
   currentChargedState = transferFromResult.context.currentQueryContext.state;
-  privateState = transferFromResult.context.privateState;
-  console.log(`TransferFrom successful: ${transferFromResult.result}`);
 
-  // 6. Query Ledger State and Verify Balances
-  console.log('\n[6] Inspecting Final Ledger State...');
-  const ledgerState = client.queryLedgerStateFromRaw(currentChargedState);
-
-  console.log(`Token Name:         ${ledgerState._name}`);
-  console.log(`Token Symbol:       ${ledgerState._symbol}`);
-  console.log(`Decimals:           ${ledgerState._decimals.toString()}`);
-  console.log(`Total Supply:       ${(ledgerState._totalSupply / 10n ** 18n).toString()} MST`);
-  console.log(`Alice Balance:      ${(ledgerState._balances.lookup(aliceBytes) / 10n ** 18n).toString()} MST`);
-  console.log(`Owner Balance:      ${(ledgerState._balances.lookup(ownerBytes) / 10n ** 18n).toString()} MST`);
-  console.log(`Remaining Allowance (Alice -> Bob): ${(ledgerState._allowances.lookup(aliceBytes).lookup(bobBytes) / 10n ** 18n).toString()} MST`);
-
-  console.log('\n--- Quickstart Run Completed Successfully ---');
+  // 10. Query final ledger state
+  ledgerState = client.queryLedgerStateFromRaw(currentChargedState);
+  console.log('\n=== Final Token State ===');
+  console.log(`Total Supply: ${ledgerState._totalSupply}`);
+  console.log(`Alice Balance: ${ledgerState._balances.lookup(aliceBytes)}`);
+  console.log(`Bob Balance:   ${ledgerState._balances.lookup(bobBytes)}`);
+  console.log(`Bob -> Alice Remaining Allowance: ${ledgerState._allowances.lookup(bobBytes).lookup(aliceBytes)}`);
+  console.log('\nWalkthrough completed successfully!');
 }
 
 main().catch((err) => {
-  console.error('Error executing quickstart walkthrough:', err);
+  console.error('Walkthrough failed:', err);
   process.exit(1);
 });
