@@ -71,6 +71,7 @@ You are an expert AI assistant specialized in the Midnight blockchain, the Compa
   - Constructor Context: \`CompactRuntime.createConstructorContext(privateState, coinPublicKey);\`
   - Initial State: \`const { currentContractState, currentPrivateState, currentZswapLocalState } = contract.initialState(constructorCtx);\`
   - Circuit Context: \`CompactRuntime.createCircuitContext(contractAddress, coinPublicKey, contractStateData, privateState);\`
+  - Context Synchronization: In unit test harnesses with multi-caller flows, always synchronize \`circuitContext.currentPrivateState = privateState\` when switching callers or before circuit execution so witnesses receive the updated secret keys.
 - Invoking Circuits: \`const result = contract.circuits.<circuitName>(circuitContext, ...args);\`
 - Reading state: \`const state = ledger(result.context.currentQueryContext.state);\`
 
@@ -78,7 +79,7 @@ When responding:
 - Provide high-quality, idiomatic, clean code.
 - ALWAYS use \`disclose(...)\` on constructor arguments, circuit arguments, and witnesses when assigning to public ledger variables.
 - When fixing compiler errors, identify the exact Compact syntax or type mismatch (such as missing disclose(), missing parentheses in assert, using sha256 instead of persistentHash, or missing constructor) and provide the complete, compilable Compact code block.
-- When generating Midnight.js clients or Vitest test suites, ensure all imports, mock contexts, and witness tuples \`[PS, Value]\` are strictly type-safe.
+- When generating Midnight.js clients or Vitest test suites, ensure all imports, mock contexts, and witness tuples \`[PS, Value]\` are strictly type-safe, and synchronize \`circuitContext.currentPrivateState = privateState\` whenever caller identities switch.
 `;
 
 export async function POST(req: NextRequest) {
@@ -235,9 +236,12 @@ MANDATORY MIDNIGHT-CQ TEST GENERATION RULES (CRITICAL - DO NOT VIOLATE):
 
 2. **ALL COMPACT UINT VALUES MUST BE BIGINT**:
    - All Compact \`Uint<N>\` types (\`Uint<8>\`, \`Uint<16>\`, \`Uint<32>\`, \`Uint<64>\`, \`Uint<128>\`, \`Uint<256>\`) in TypeScript runtime require \`bigint\` literals (e.g. \`8n\`, \`18n\`, \`1_000n\`). Passing numbers causes runtime type errors.
-   - Always implement an auto-normalizing runner in the test file:
+   - Always implement an auto-normalizing runner in the test file that also ensures \`circuitContext.currentPrivateState\` is synced:
      \`\`\`typescript
      const runCircuit = (circuitFn: (...args: any[]) => any, ...args: any[]) => {
+       if (circuitContext) {
+         circuitContext.currentPrivateState = privateState;
+       }
        const normalizedArgs = args.map((arg) => (typeof arg === 'number' ? BigInt(arg) : arg));
        const result = circuitFn(circuitContext, ...normalizedArgs);
        circuitContext = CompactRuntime.createCircuitContext(
@@ -265,6 +269,38 @@ MANDATORY MIDNIGHT-CQ TEST GENERATION RULES (CRITICAL - DO NOT VIOLATE):
 6. **DETERMINISTIC MOCK DATA**:
    - Create 32-byte key arrays: \`const createKey = (b: number): Uint8Array => new Uint8Array(32).fill(b);\`
    - Context addresses: \`const dummyContractAddress = '00'.repeat(32); const dummyCoinPublicKey = '01'.repeat(32);\`
+
+7. **CALLER AUTHENTICATION & DERIVED ACCOUNTS (CRITICAL)**:
+   - If the contract uses caller identity verification (e.g. \`authenticate(account)\` checking \`persistentHash<[ContractAddress, Bytes<32>]>([kernel.self(), sk])\`), the test MUST derive public accounts matching the compiled contract's internal persistentHash:
+     \`\`\`typescript
+     const dummyAddressBytes = Uint8Array.from(Buffer.from(dummyContractAddress, 'hex'));
+     const helperContract = new Contract({ localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)] });
+     const deriveAccount = (sk: Uint8Array): Uint8Array => {
+       return (helperContract as any)._persistentHash_0([{ bytes: dummyAddressBytes }, sk]);
+     };
+     \`\`\`
+   - NEVER use a fallback that returns raw \`sk\` (\`return sk;\`). Raw secret keys will cause \`authenticate()\` assertions to fail with \`caller authorization failed\`.
+   - **MANDATORY: SYNC PRIVATE STATE WHEN SWITCHING CALLERS (CRITICAL)**:
+     When simulating multiple callers (e.g. owner, Alice, Bob) and switching secret keys via \`setCallerSecretKey(sk)\`, you MUST explicitly synchronize \`circuitContext.currentPrivateState\`:
+     \`\`\`typescript
+     const setCallerSecretKey = (sk: Uint8Array) => {
+       privateState = { currentSecretKey: sk };
+       if (circuitContext) {
+         circuitContext.currentPrivateState = privateState;
+       }
+     };
+     \`\`\`
+     **DO NOT FORGET THIS**: If \`circuitContext.currentPrivateState\` is not synchronized when switching callers, the witness function will continue using the initial caller's secret key (e.g. the owner's key), causing \`authenticate()\` assertions to fail with \`"FungibleToken: caller authorization failed"\` on every non-owner circuit call (transfers, approvals, transferFrom, burning, etc.) and failing the entire test suite. Always sync \`circuitContext.currentPrivateState = privateState\` both in \`setCallerSecretKey\` and before circuit execution in \`runCircuit\`.
+
+8. **UNEXPORTED INTERNAL CIRCUITS (CRITICAL)**:
+   - In Compact, only circuits declared with \`export circuit\` are exposed on \`contract.circuits\`.
+   - Circuits declared without \`export\` (such as \`pure circuit isZeroKey(...)\` or \`circuit _transfer(...)\`) are private internal circuits and DO NOT exist on \`contract.circuits\`.
+   - NEVER call \`contract.circuits.isZeroKey\`, \`contract.circuits.zeroKey\`, or \`contract.pureCircuits.<name>\`.
+   - For internal zero-key checks or helper logic, implement local TypeScript utility helpers in the test:
+     \`\`\`typescript
+     const isZeroKey = (key: Uint8Array): boolean => key.every((b) => b === 0);
+     const zeroKey = (): Uint8Array => new Uint8Array(32).fill(0);
+     \`\`\`
 
 Please generate the complete, runnable Vitest test file (\`tests/contracts/${cleanContractName}.test.ts\`) inside a \`\`\`typescript ... \`\`\` code block.
 `;

@@ -151,8 +151,8 @@ export default function CompactIdePage() {
     const leftSubContainerRef = useRef<HTMLDivElement>(null);
 
     // Keep refs for Monaco keyboard command bindings
-    const handleQuickSaveRef = useRef<() => void>(() => {});
-    const handleRunTestsRef = useRef<() => void>(() => {});
+    const handleQuickSaveRef = useRef<() => void>(() => { });
+    const handleRunTestsRef = useRef<() => void>(() => { });
 
     // Restore editor workspace session & split layout from localStorage once mounted on client
     useEffect(() => {
@@ -235,7 +235,7 @@ export default function CompactIdePage() {
                     const next = !prev;
                     try {
                         localStorage.setItem('midnight_ide_explorer_open', String(next));
-                    } catch {}
+                    } catch { }
                     return next;
                 });
             }
@@ -257,7 +257,7 @@ export default function CompactIdePage() {
             setLeftPanelWidth(clamped);
             try {
                 localStorage.setItem('midnight_ide_split_width', clamped.toString());
-            } catch {}
+            } catch { }
         };
 
         const handleMouseUp = () => {
@@ -286,7 +286,7 @@ export default function CompactIdePage() {
             setExplorerWidth(clamped);
             try {
                 localStorage.setItem('midnight_ide_explorer_width', clamped.toString());
-            } catch {}
+            } catch { }
         };
 
         const handleMouseUp = () => {
@@ -361,7 +361,7 @@ export default function CompactIdePage() {
             try {
                 localStorage.setItem('midnight_ide_is_dirty', 'false');
                 localStorage.setItem('midnight_ide_last_saved_code', sourceCode);
-            } catch {}
+            } catch { }
             toast.success('File Saved', `Saved to ${data.data.path}`);
             return true;
         } catch (err: any) {
@@ -386,7 +386,7 @@ export default function CompactIdePage() {
         setIsDirty(false);
         try {
             localStorage.setItem('midnight_ide_is_dirty', 'false');
-        } catch {}
+        } catch { }
         action();
     };
 
@@ -411,7 +411,7 @@ export default function CompactIdePage() {
         setIsDirty(false);
         try {
             localStorage.setItem('midnight_ide_is_dirty', 'false');
-        } catch {}
+        } catch { }
         const actionToRun = pendingFileAction;
         setPendingFileAction(null);
         setIsUnsavedModalOpen(false);
@@ -518,7 +518,7 @@ export default function CompactIdePage() {
                 const next = !prev;
                 try {
                     localStorage.setItem('midnight_ide_explorer_open', String(next));
-                } catch {}
+                } catch { }
                 return next;
             });
         });
@@ -782,7 +782,7 @@ import CompactStandardLibrary;
                         localStorage.setItem('midnight_ide_active_language', 'compact');
                         localStorage.setItem('midnight_ide_is_dirty', 'false');
                         localStorage.setItem('midnight_ide_last_saved_code', content);
-                    } catch {}
+                    } catch { }
                     if (editorRef.current) {
                         editorRef.current.setValue(content);
                     }
@@ -825,7 +825,7 @@ import CompactStandardLibrary;
                     localStorage.setItem('midnight_ide_active_language', 'compact');
                     localStorage.setItem('midnight_ide_is_dirty', 'false');
                     localStorage.setItem('midnight_ide_last_saved_code', content || '');
-                } catch {}
+                } catch { }
                 if (editorRef.current) {
                     editorRef.current.setValue(content || '');
                 }
@@ -1048,7 +1048,7 @@ import CompactStandardLibrary;
                 try {
                     localStorage.setItem('midnight_ide_is_dirty', 'false');
                     localStorage.setItem('midnight_ide_last_saved_code', sourceCode);
-                } catch {}
+                } catch { }
                 toast.success('Contract Saved', `Saved to ${handle.name}`);
                 setIsSaveAsModalOpen(false);
                 return;
@@ -1095,7 +1095,7 @@ import CompactStandardLibrary;
                 localStorage.setItem('midnight_ide_filename', data.data.filename);
                 localStorage.setItem('midnight_ide_is_dirty', 'false');
                 localStorage.setItem('midnight_ide_last_saved_code', sourceCode);
-            } catch {}
+            } catch { }
             toast.success(
                 'Saved to Workspace Folder',
                 `Saved as ${data.data.folder}/${data.data.filename}`
@@ -1127,7 +1127,7 @@ import CompactStandardLibrary;
         try {
             localStorage.setItem('midnight_ide_is_dirty', 'false');
             localStorage.setItem('midnight_ide_last_saved_code', sourceCode);
-        } catch {}
+        } catch { }
         toast.success('Contract Saved', `Downloaded ${safeFilename}`);
         setIsSaveAsModalOpen(false);
     };
@@ -1185,13 +1185,12 @@ import CompactStandardLibrary;
                             setIsExplorerOpen(next);
                             try {
                                 localStorage.setItem('midnight_ide_explorer_open', String(next));
-                            } catch {}
+                            } catch { }
                         }}
-                        className={`inline-flex items-center space-x-1.5 rounded-xl px-3 py-2 text-xs font-semibold border transition-all cursor-pointer ${
-                            isExplorerOpen
+                        className={`inline-flex items-center space-x-1.5 rounded-xl px-3 py-2 text-xs font-semibold border transition-all cursor-pointer ${isExplorerOpen
                                 ? 'bg-indigo-600/30 text-white border-indigo-500/50 shadow-md shadow-indigo-950/40'
                                 : 'bg-midnight-900/90 text-slate-400 hover:text-white border-white/5 hover:border-white/20'
-                        }`}
+                            }`}
                         title="Toggle File System Explorer (contracts, sdk, examples, docs, scripts, modules, tests, utils) [Ctrl+B]"
                     >
                         <FolderTree className="h-4 w-4 text-indigo-400" />
@@ -1212,11 +1211,10 @@ import CompactStandardLibrary;
                     <button
                         onClick={handleQuickSave}
                         disabled={isSaving}
-                        className={`inline-flex items-center space-x-1.5 rounded-xl px-3 py-2 text-xs font-semibold border transition-colors cursor-pointer ${
-                            isDirty
+                        className={`inline-flex items-center space-x-1.5 rounded-xl px-3 py-2 text-xs font-semibold border transition-colors cursor-pointer ${isDirty
                                 ? 'bg-indigo-600/30 text-indigo-200 border-indigo-500/50 hover:bg-indigo-600/40 shadow-sm'
                                 : 'bg-midnight-900 text-slate-300 border-white/10 hover:bg-midnight-800'
-                        }`}
+                            }`}
                         title="Save to workspace contracts/ folder (Ctrl+S)"
                     >
                         <Save className="h-3.5 w-3.5 text-emerald-400" />
@@ -1311,11 +1309,10 @@ import CompactStandardLibrary;
                     {/* Highly Visible AI Copilot Button */}
                     <button
                         onClick={() => setActiveTab('ai')}
-                        className={`inline-flex items-center space-x-2 rounded-xl px-4 py-2 text-xs font-bold shadow-lg transition-all cursor-pointer ${
-                            activeTab === 'ai'
+                        className={`inline-flex items-center space-x-2 rounded-xl px-4 py-2 text-xs font-bold shadow-lg transition-all cursor-pointer ${activeTab === 'ai'
                                 ? 'bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-500 text-white shadow-indigo-500/30 scale-[1.02] ring-2 ring-indigo-400'
                                 : 'bg-gradient-to-r from-purple-600/40 via-indigo-600/40 to-cyan-500/40 text-indigo-100 border border-indigo-500/60 hover:from-purple-600 hover:to-cyan-500 hover:text-white shadow-indigo-950/50 hover:scale-[1.02]'
-                        }`}
+                            }`}
                         title="Open Gemini 3.7 Flash AI Copilot"
                     >
                         <Sparkles className="h-4 w-4 text-cyan-300 animate-pulse" />
@@ -1375,7 +1372,17 @@ import CompactStandardLibrary;
                         <span>Deploy</span>
                     </Link>
 
-                    {/* 6. Run All Available Tests */}
+                    {/* 6. Export DApp Bundle for Gemini */}
+                    <button
+                        onClick={() => setIsExportDappModalOpen(true)}
+                        className="inline-flex items-center space-x-1.5 rounded-xl bg-gradient-to-r from-indigo-600/30 via-purple-600/30 to-cyan-600/30 hover:from-indigo-600/50 hover:to-cyan-600/50 text-cyan-200 border border-cyan-500/40 hover:border-cyan-400 px-3 py-2 text-xs font-bold transition-all cursor-pointer shadow-sm hover:shadow-cyan-500/20"
+                        title="Export all compiled artifacts, ZKIR bytecodes, and master prompt for Gemini to scaffold the frontend"
+                    >
+                        <PackageCheck className="h-3.5 w-3.5 text-cyan-300" />
+                        <span>Export for Gemini</span>
+                    </button>
+
+                    {/* 7. Run All Available Tests */}
                     <button
                         onClick={() => handleRunTests(true)}
                         disabled={isRunningTests || isCompiling}
@@ -1384,16 +1391,6 @@ import CompactStandardLibrary;
                     >
                         <FlaskConical className="h-3.5 w-3.5 text-emerald-400" />
                         <span>All Tests</span>
-                    </button>
-
-                    {/* 7. Export DApp Bundle for Gemini */}
-                    <button
-                        onClick={() => setIsExportDappModalOpen(true)}
-                        className="inline-flex items-center space-x-1.5 rounded-xl bg-gradient-to-r from-indigo-600/30 via-purple-600/30 to-cyan-600/30 hover:from-indigo-600/50 hover:to-cyan-600/50 text-cyan-200 border border-cyan-500/40 hover:border-cyan-400 px-3 py-2 text-xs font-bold transition-all cursor-pointer shadow-sm hover:shadow-cyan-500/20"
-                        title="Export all compiled artifacts, ZKIR bytecodes, and master prompt for Gemini to scaffold the frontend"
-                    >
-                        <PackageCheck className="h-3.5 w-3.5 text-cyan-300" />
-                        <span>Export for Gemini</span>
                     </button>
                 </div>
             </div>
@@ -1408,11 +1405,10 @@ import CompactStandardLibrary;
                         <button
                             key={tmpl.id}
                             onClick={() => handleSelectTemplate(tmpl)}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-medium whitespace-nowrap transition-all ${
-                                selectedTemplate.id === tmpl.id
+                            className={`px-3 py-1.5 rounded-xl text-xs font-medium whitespace-nowrap transition-all ${selectedTemplate.id === tmpl.id
                                     ? 'bg-indigo-600/30 text-indigo-200 border border-indigo-500/40 shadow-inner'
                                     : 'bg-midnight-950 text-slate-400 hover:text-white border border-white/5'
-                            }`}
+                                }`}
                         >
                             {tmpl.title}
                         </button>
@@ -1456,9 +1452,8 @@ import CompactStandardLibrary;
             {/* Main IDE Workspace: Resizable Split-Pane (Left: Editor / Right: Studio) */}
             <div
                 ref={splitWorkspaceRef}
-                className={`flex flex-col lg:flex-row items-stretch gap-0 flex-1 min-h-[560px] relative ${
-                    isDraggingSplitter || isDraggingExplorerSplitter ? 'select-none cursor-col-resize' : ''
-                }`}
+                className={`flex flex-col lg:flex-row items-stretch gap-0 flex-1 min-h-[560px] relative ${isDraggingSplitter || isDraggingExplorerSplitter ? 'select-none cursor-col-resize' : ''
+                    }`}
                 style={{
                     ['--left-pane-width' as any]: `${leftPanelWidth}%`,
                 }}
@@ -1501,27 +1496,25 @@ import CompactStandardLibrary;
                                     setExplorerWidth(260);
                                     try {
                                         localStorage.setItem('midnight_ide_explorer_width', '260');
-                                    } catch {}
+                                    } catch { }
                                     toast.info('Explorer Reset', 'Reset explorer width to 260px');
                                 }}
                                 className="hidden lg:flex items-center justify-center w-3 mx-0.5 group cursor-col-resize z-20 select-none flex-shrink-0"
                                 title="Drag horizontally to resize File Explorer (Double-click to reset)"
                             >
                                 <div
-                                    className={`w-1 h-14 rounded-full transition-all duration-150 ${
-                                        isDraggingExplorerSplitter
+                                    className={`w-1 h-14 rounded-full transition-all duration-150 ${isDraggingExplorerSplitter
                                             ? 'bg-gradient-to-b from-indigo-400 via-cyan-400 to-purple-500 w-1.5 shadow-lg shadow-indigo-500/50 scale-y-110'
                                             : 'bg-white/10 group-hover:bg-indigo-400/80 group-hover:w-1.5 group-hover:shadow-md group-hover:shadow-indigo-400/30'
-                                    }`}
+                                        }`}
                                 />
                             </div>
                         </>
                     )}
 
                     {/* Monaco Editor Card */}
-                    <div className={`flex-1 flex flex-col rounded-2xl border border-indigo-500/20 bg-midnight-950/90 shadow-2xl overflow-hidden min-h-[500px] min-w-0 ${
-                        isDraggingSplitter || isDraggingExplorerSplitter ? 'pointer-events-none select-none' : ''
-                    }`}>
+                    <div className={`flex-1 flex flex-col rounded-2xl border border-indigo-500/20 bg-midnight-950/90 shadow-2xl overflow-hidden min-h-[500px] min-w-0 ${isDraggingSplitter || isDraggingExplorerSplitter ? 'pointer-events-none select-none' : ''
+                        }`}>
                         {/* Editor Tab Header */}
                         <div className="flex items-center justify-between border-b border-white/10 bg-midnight-900/80 px-4 py-2 text-xs">
                             <div className="flex items-center space-x-2 truncate min-w-0">
@@ -1588,7 +1581,7 @@ import CompactStandardLibrary;
                                     setIsDirty(hasChanged);
                                     try {
                                         localStorage.setItem('midnight_ide_is_dirty', String(hasChanged));
-                                    } catch {}
+                                    } catch { }
                                 }}
                                 onMount={handleEditorDidMount}
                                 options={{
@@ -1619,35 +1612,32 @@ import CompactStandardLibrary;
                         setLeftPanelWidth(56);
                         try {
                             localStorage.setItem('midnight_ide_split_width', '56');
-                        } catch {}
+                        } catch { }
                         toast.info('Split Reset', 'Reset editor pane layout to 56% / 44%');
                     }}
                     className="hidden lg:flex items-center justify-center w-4 mx-0.5 group cursor-col-resize z-20 select-none flex-shrink-0"
                     title="Drag horizontally to resize Editor / Studio (Double-click to reset)"
                 >
                     <div
-                        className={`w-1 h-16 rounded-full transition-all duration-150 ${
-                            isDraggingSplitter
+                        className={`w-1 h-16 rounded-full transition-all duration-150 ${isDraggingSplitter
                                 ? 'bg-gradient-to-b from-cyan-400 via-indigo-500 to-purple-500 w-1.5 shadow-lg shadow-cyan-500/50 scale-y-110'
                                 : 'bg-white/10 group-hover:bg-cyan-400/80 group-hover:w-1.5 group-hover:shadow-md group-hover:shadow-cyan-400/30'
-                        }`}
+                            }`}
                     />
                 </div>
 
                 {/* Right: Compiler Output & Artifact Studio */}
-                <div className={`flex flex-col rounded-2xl border border-indigo-500/20 bg-midnight-900/70 backdrop-blur-xl shadow-2xl overflow-hidden min-h-[500px] w-full mt-6 lg:mt-0 lg:w-[calc(100%-var(--left-pane-width)-8px)] lg:flex-1 ${
-                    isDraggingSplitter || isDraggingExplorerSplitter ? 'pointer-events-none select-none' : ''
-                }`}>
+                <div className={`flex flex-col rounded-2xl border border-indigo-500/20 bg-midnight-900/70 backdrop-blur-xl shadow-2xl overflow-hidden min-h-[500px] w-full mt-6 lg:mt-0 lg:w-[calc(100%-var(--left-pane-width)-8px)] lg:flex-1 ${isDraggingSplitter || isDraggingExplorerSplitter ? 'pointer-events-none select-none' : ''
+                    }`}>
                     {/* Studio Tabs Header */}
                     <div className="flex items-center justify-between border-b border-white/10 bg-midnight-950/80 px-3 py-2 overflow-x-auto">
                         <div className="flex space-x-1 min-w-max">
                             <button
                                 onClick={() => setActiveTab('circuits')}
-                                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                                    activeTab === 'circuits'
+                                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${activeTab === 'circuits'
                                         ? 'bg-indigo-600 text-white shadow'
                                         : 'text-slate-400 hover:text-white'
-                                }`}
+                                    }`}
                             >
                                 <Zap className="h-3.5 w-3.5" />
                                 <span>Circuits</span>
@@ -1655,11 +1645,10 @@ import CompactStandardLibrary;
 
                             <button
                                 onClick={() => setActiveTab('dts')}
-                                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                                    activeTab === 'dts'
+                                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${activeTab === 'dts'
                                         ? 'bg-indigo-600 text-white shadow'
                                         : 'text-slate-400 hover:text-white'
-                                }`}
+                                    }`}
                             >
                                 <FileCode2 className="h-3.5 w-3.5" />
                                 <span>Types (.d.ts)</span>
@@ -1667,11 +1656,10 @@ import CompactStandardLibrary;
 
                             <button
                                 onClick={() => setActiveTab('console')}
-                                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                                    activeTab === 'console'
+                                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${activeTab === 'console'
                                         ? 'bg-indigo-600 text-white shadow'
                                         : 'text-slate-400 hover:text-white'
-                                }`}
+                                    }`}
                             >
                                 <Terminal className="h-3.5 w-3.5" />
                                 <span>Console</span>
@@ -1684,31 +1672,28 @@ import CompactStandardLibrary;
 
                             <button
                                 onClick={() => setActiveTab('js')}
-                                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                                    activeTab === 'js'
+                                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${activeTab === 'js'
                                         ? 'bg-indigo-600 text-white shadow'
                                         : 'text-slate-400 hover:text-white'
-                                }`}
+                                    }`}
                             >
                                 <span>JS Runtime</span>
                             </button>
 
                             <button
                                 onClick={() => setActiveTab('tests')}
-                                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                                    activeTab === 'tests'
+                                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${activeTab === 'tests'
                                         ? 'bg-emerald-600 text-white shadow'
                                         : 'text-slate-400 hover:text-white'
-                                }`}
+                                    }`}
                             >
                                 <FlaskConical className="h-3.5 w-3.5" />
                                 <span>Tests</span>
                                 {testResult && (
-                                    <span className={`ml-1 flex h-4 min-w-4 px-1 items-center justify-center rounded-full text-[10px] font-bold ${
-                                        testResult.failedTests === 0
+                                    <span className={`ml-1 flex h-4 min-w-4 px-1 items-center justify-center rounded-full text-[10px] font-bold ${testResult.failedTests === 0
                                             ? 'bg-emerald-400/30 text-emerald-200'
                                             : 'bg-rose-500 text-white'
-                                    }`}>
+                                        }`}>
                                         {testResult.failedTests === 0 ? '✓' : testResult.failedTests}
                                     </span>
                                 )}
@@ -1716,11 +1701,10 @@ import CompactStandardLibrary;
 
                             <button
                                 onClick={() => setActiveTab('verify')}
-                                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                                    activeTab === 'verify'
+                                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${activeTab === 'verify'
                                         ? 'bg-cyan-600 text-white shadow'
                                         : 'text-slate-400 hover:text-white'
-                                }`}
+                                    }`}
                             >
                                 <ShieldCheck className="h-3.5 w-3.5 text-cyan-300" />
                                 <span>Verification</span>
@@ -1733,11 +1717,10 @@ import CompactStandardLibrary;
 
                             <button
                                 onClick={() => setActiveTab('ai')}
-                                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
-                                    activeTab === 'ai'
+                                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${activeTab === 'ai'
                                         ? 'bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-500 text-white shadow-indigo-500/30 ring-1 ring-white/20'
                                         : 'bg-indigo-600/30 text-indigo-100 border border-indigo-500/50 hover:bg-indigo-600/50 hover:text-white'
-                                }`}
+                                    }`}
                             >
                                 <Sparkles className="h-3.5 w-3.5 text-cyan-300 animate-pulse" />
                                 <span>AI Copilot</span>
@@ -1997,11 +1980,10 @@ import CompactStandardLibrary;
                                         <div className="space-y-4">
                                             {/* Test Suite Summary Banner */}
                                             <div
-                                                className={`rounded-xl p-4 border ${
-                                                    testResult.failedTests === 0
+                                                className={`rounded-xl p-4 border ${testResult.failedTests === 0
                                                         ? 'bg-emerald-950/40 border-emerald-500/30'
                                                         : 'bg-rose-950/40 border-rose-500/30'
-                                                }`}
+                                                    }`}
                                             >
                                                 <div className="flex items-center justify-between">
                                                     <div className="flex items-center space-x-2.5">

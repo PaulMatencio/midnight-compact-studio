@@ -1,0 +1,219 @@
+// SPDX-License-Identifier: MIT
+// Compact FungibleToken Contract - Optimized & Secured
+pragma language_version >= 0.23;
+
+import CompactStandardLibrary;
+
+// Ledger state
+export ledger _balances: Map<Bytes<32>, Uint<128>>;
+// Flattened composite key: [owner, spender] -> allowance
+export ledger _allowances: Map<[Bytes<32>, Bytes<32>], Uint<128>>;
+export ledger _totalSupply: Uint<128>;
+
+export ledger _name: Opaque<"string">;
+export ledger _symbol: Opaque<"string">;
+export ledger _decimals: Uint<8>;
+export ledger owner: Bytes<32>;
+
+// Private witness providing caller secret key
+witness localSecretKey(): Bytes<32>;
+
+/**
+ * Authenticates that the prover possesses the private secret key
+ * corresponding to the specified public identity/address.
+ */
+circuit authenticate(account: Bytes<32>): [] {
+  const sk = localSecretKey();
+  // Domain separation tag + contract address + secret key
+  const domainTag = pad(32, "fungible-token:auth");
+  const derivedAccount = persistentHash<[Bytes<32>, ContractAddress, Bytes<32>]>([
+    domainTag,
+    kernel.self(),
+    sk
+  ]);
+  assert(derivedAccount == account, "FungibleToken: caller authorization failed");
+}
+
+constructor(
+  initialOwner: Bytes<32>,
+  name_: Opaque<"string">,
+  symbol_: Opaque<"string">,
+  decimals_: Uint<8>
+) {
+  owner = disclose(initialOwner);
+  _name = disclose(name_);
+  _symbol = disclose(symbol_);
+  _decimals = disclose(decimals_);
+  _totalSupply = 0;
+}
+
+export circuit name(): Opaque<"string"> {
+  return _name;
+}
+
+export circuit symbol(): Opaque<"string"> {
+  return _symbol;
+}
+
+export circuit decimals(): Uint<8> {
+  return _decimals;
+}
+
+export circuit totalSupply(): Uint<128> {
+  return _totalSupply;
+}
+
+export circuit balanceOf(account: Bytes<32>): Uint<128> {
+  if (disclose(!_balances.member(disclose(account)))) {
+    return 0;
+  }
+  return _balances.lookup(disclose(account));
+}
+
+export circuit allowance(
+  ownerAccount: Bytes<32>,
+  spender: Bytes<32>
+): Uint<128> {
+  const allowanceKey: [Bytes<32>, Bytes<32>] = [disclose(ownerAccount), disclose(spender)];
+  if (disclose(!_allowances.member(allowanceKey))) {
+    return 0;
+  }
+  return _allowances.lookup(allowanceKey);
+}
+
+export circuit transfer(
+  caller: Bytes<32>,
+  to: Bytes<32>,
+  value: Uint<128>
+): Boolean {
+  authenticate(caller);
+  _transfer(caller, to, value);
+  return true;
+}
+
+export circuit approve(
+  caller: Bytes<32>,
+  spender: Bytes<32>,
+  value: Uint<128>
+): Boolean {
+  authenticate(caller);
+  _approve(caller, spender, value);
+  return true;
+}
+
+export circuit transferFrom(
+  caller: Bytes<32>,
+  fromAccount: Bytes<32>,
+  to: Bytes<32>,
+  value: Uint<128>
+): Boolean {
+  authenticate(caller);
+  _spendAllowance(fromAccount, caller, value);
+  _transfer(fromAccount, to, value);
+  return true;
+}
+
+export circuit mint(
+  to: Bytes<32>,
+  value: Uint<128>
+): Boolean {
+  authenticate(owner);
+  _mint(to, value);
+  return true;
+}
+
+export circuit burn(
+  caller: Bytes<32>,
+  value: Uint<128>
+): Boolean {
+  authenticate(caller);
+  _burn(caller, value);
+  return true;
+}
+
+circuit _transfer(
+  fromAccount: Bytes<32>,
+  to: Bytes<32>,
+  value: Uint<128>
+): [] {
+  assert(!isZeroKey(fromAccount), "FungibleToken: invalid sender");
+  assert(!isZeroKey(to), "FungibleToken: invalid receiver");
+  if (disclose(fromAccount == to)) {
+    // Self-transfer validation: verify sufficient balance without redundant updates
+    const bal = balanceOf(fromAccount);
+    assert(bal >= disclose(value), "FungibleToken: insufficient balance");
+    return;
+  }
+  _update(fromAccount, to, value);
+}
+
+circuit _update(
+  fromAccount: Bytes<32>,
+  to: Bytes<32>,
+  value: Uint<128>
+): [] {
+  const MAX_UINT128 = 340282366920938463463374607431768211455;
+
+  if (disclose(isZeroKey(fromAccount))) {
+    // Mint operation
+    assert(MAX_UINT128 - _totalSupply >= disclose(value), "FungibleToken: supply overflow");
+    _totalSupply = (_totalSupply + disclose(value)) as Uint<128>;
+  } else {
+    const fromBal = balanceOf(fromAccount);
+    assert(fromBal >= disclose(value), "FungibleToken: insufficient balance");
+    _balances.insert(disclose(fromAccount), (fromBal - disclose(value)) as Uint<128>);
+  }
+
+  if (disclose(isZeroKey(to))) {
+    // Burn operation
+    assert(_totalSupply >= disclose(value), "FungibleToken: supply underflow");
+    _totalSupply = (_totalSupply - disclose(value)) as Uint<128>;
+  } else {
+    const toBal = balanceOf(to);
+    assert(MAX_UINT128 - toBal >= disclose(value), "FungibleToken: balance overflow");
+    _balances.insert(disclose(to), (toBal + disclose(value)) as Uint<128>);
+  }
+}
+
+circuit _mint(account: Bytes<32>, value: Uint<128>): [] {
+  assert(!isZeroKey(account), "FungibleToken: invalid receiver");
+  _update(zeroKey(), account, value);
+}
+
+circuit _burn(account: Bytes<32>, value: Uint<128>): [] {
+  assert(!isZeroKey(account), "FungibleToken: invalid sender");
+  _update(account, zeroKey(), value);
+}
+
+circuit _approve(
+  ownerAccount: Bytes<32>,
+  spender: Bytes<32>,
+  value: Uint<128>
+): [] {
+  assert(!isZeroKey(ownerAccount), "FungibleToken: invalid owner");
+  assert(!isZeroKey(spender), "FungibleToken: invalid spender");
+  const key: [Bytes<32>, Bytes<32>] = [disclose(ownerAccount), disclose(spender)];
+  _allowances.insert(key, disclose(value));
+}
+
+circuit _spendAllowance(
+  ownerAccount: Bytes<32>,
+  spender: Bytes<32>,
+  value: Uint<128>
+): [] {
+  const currentAllowance = allowance(ownerAccount, spender);
+  assert(currentAllowance >= disclose(value), "FungibleToken: insufficient allowance");
+
+  const MAX_UINT128 = 340282366920938463463374607431768211455;
+  if (disclose(currentAllowance < MAX_UINT128)) {
+    _approve(ownerAccount, spender, (currentAllowance - disclose(value)) as Uint<128>);
+  }
+}
+
+pure circuit isZeroKey(key: Bytes<32>): Boolean {
+  return key == default<Bytes<32>>;
+}
+
+pure circuit zeroKey(): Bytes<32> {
+  return default<Bytes<32>>;
+}
