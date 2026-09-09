@@ -26,6 +26,7 @@ import {
     Download,
     Play,
     PackageCheck,
+    Repeat,
 } from 'lucide-react';
 import { useToast } from '@/src/presentation/context/ToastContext';
 import { getCleanContractBaseName, CONTRACT_PATHS } from '@/src/lib/contract-utils';
@@ -88,11 +89,14 @@ Ask a question below or click one of the quick actions to get started!`,
     const [isStreaming, setIsStreaming] = useState<boolean>(false);
     const [abortController, setAbortController] = useState<AbortController | null>(null);
 
-    // Settings
     const [apiKey, setApiKey] = useState<string>('');
     const [selectedModel, setSelectedModel] = useState<string>('gemini-3.7-flash');
     const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
     const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
+
+    // Autonomous Test & Auto-Heal Loop Agent State
+    const [isAgentRunning, setIsAgentRunning] = useState<boolean>(false);
+    const [agentStatus, setAgentStatus] = useState<string>('');
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -290,6 +294,132 @@ Ask a question below or click one of the quick actions to get started!`,
         } finally {
             setIsStreaming(false);
             setAbortController(null);
+        }
+    };
+
+    // Autonomous Test & Auto-Heal Loop Agent Runner
+    const handleRunAutoTestAgent = async () => {
+        if (isStreaming || isAgentRunning) return;
+
+        const effectiveContractName = contractFilename
+            ? getCleanContractBaseName(contractFilename)
+            : getCleanContractBaseName(filename);
+
+        const effectiveCode = contractCode || sourceCode;
+
+        setIsAgentRunning(true);
+        setAgentStatus(`Starting autonomous compile & test loop for ${effectiveContractName}...`);
+
+        const agentMsgId = `agent-${Date.now()}`;
+        const initialAgentMsg: AiMessage = {
+            id: agentMsgId,
+            role: 'assistant',
+            content: `🤖 **Autonomous Test Agent Activated for \`${effectiveContractName}\`**\n\n- 🔄 Step 1: Compiling Compact contract...\n`,
+            timestamp: new Date(),
+            action: 'agent_loop',
+        };
+
+        setMessages((prev) => [...prev, initialAgentMsg]);
+
+        try {
+            const res = await fetch('/api/ai/agent/test-loop', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contractName: effectiveContractName,
+                    sourceCode: effectiveCode,
+                    maxIterations: 4,
+                    apiKey: apiKey || undefined,
+                    model: selectedModel,
+                }),
+            });
+
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                if (res.status === 401) {
+                    setMessages((prev) =>
+                        prev.map((msg) =>
+                            msg.id === agentMsgId
+                                ? {
+                                      ...msg,
+                                      content: `${msg.content}\n\n⚠️ **Gemini API Key Required**\nPlease configure your Google AI Studio API key in Settings or add \`GEMINI_API_KEY\` to \`.env.local\`.`,
+                                  }
+                                : msg
+                        )
+                    );
+                    setIsSettingsOpen(true);
+                    return;
+                }
+                throw new Error(errData.message || 'Agent endpoint returned error');
+            }
+
+            const reader = res.body?.getReader();
+            if (!reader) throw new Error('No readable stream from agent endpoint');
+
+            const decoder = new TextDecoder();
+            let accumulatedContent = initialAgentMsg.content;
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const event = JSON.parse(line.slice(6));
+                            setAgentStatus(event.message);
+
+                            if (event.step === 'compiling') {
+                                accumulatedContent += `- ⚙️ **Compiler**: ${event.message}\n`;
+                            } else if (event.step === 'compile_error') {
+                                accumulatedContent += `- ❌ **Compilation Failed**:\n\`\`\`\n${event.details || event.message}\n\`\`\`\n`;
+                            } else if (event.step === 'generating_tests') {
+                                accumulatedContent += `- 🧪 **Generating Vitest Suite**: ${event.message}\n`;
+                            } else if (event.step === 'running_tests') {
+                                accumulatedContent += `- 🏃 **Round ${event.iteration}/${event.maxIterations}**: Executing tests...\n`;
+                            } else if (event.step === 'healing') {
+                                accumulatedContent += `- 🛠️ **Healing Round ${event.iteration}**: ${event.details?.failed || 0} failed. Gemini fixing witnesses & state...\n`;
+                            } else if (event.step === 'success') {
+                                accumulatedContent += `\n### 🎉 **100% PASSED!**\n${event.message}\nAll tests verified against Compact runtime in ${event.details?.iterationsUsed || 1} round(s).\n`;
+                                toast.success('Agent Succeeded', `All ${event.details?.total || 0} tests passed!`);
+                            } else if (event.step === 'failed') {
+                                accumulatedContent += `\n### ⚠️ **Agent Stopped**\n${event.message}\n`;
+                                toast.error('Agent Stopped', event.message);
+                            }
+
+                            setMessages((prev) =>
+                                prev.map((msg) =>
+                                    msg.id === agentMsgId ? { ...msg, content: accumulatedContent } : msg
+                                )
+                            );
+                        } catch {
+                            // Non-JSON SSE chunk
+                        }
+                    }
+                }
+            }
+
+            // Trigger fresh test run in the tests tab to sync with UI
+            if (onRunTests) {
+                setTimeout(() => onRunTests(), 1000);
+            }
+        } catch (agentErr: any) {
+            toast.error('Agent Error', agentErr.message);
+            setMessages((prev) =>
+                prev.map((msg) =>
+                    msg.id === agentMsgId
+                        ? { ...msg, content: `${msg.content}\n\n❌ **Agent Error**: ${agentErr.message}` }
+                        : msg
+                )
+            );
+        } finally {
+            setIsAgentRunning(false);
+            setAgentStatus('');
         }
     };
 
@@ -1089,7 +1219,7 @@ Ask a question below or click one of the quick actions to get started!`,
                             onSwitchTab('tests');
                         }
                     }}
-                    disabled={isRunningTests || isStreaming}
+                    disabled={isRunningTests || isStreaming || isAgentRunning}
                     className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 text-[11px] font-semibold hover:bg-emerald-500/30 hover:text-white transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                     title="Run Vitest circuit unit tests (Ctrl+T)"
                 >
@@ -1099,6 +1229,20 @@ Ask a question below or click one of the quick actions to get started!`,
                         <Play className="h-3 w-3 text-emerald-400 fill-current" />
                     )}
                     <span>{isRunningTests ? 'Running Tests...' : 'Run Tests'}</span>
+                </button>
+
+                <button
+                    onClick={handleRunAutoTestAgent}
+                    disabled={isStreaming || isAgentRunning || isRunningTests}
+                    className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-gradient-to-r from-cyan-600/30 via-indigo-600/30 to-purple-600/30 text-cyan-200 border border-cyan-500/40 text-[11px] font-bold hover:from-cyan-600/40 hover:to-purple-600/40 hover:text-white transition-all cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Autonomous Loop: Compiles, generates/runs tests, and auto-heals failures with Gemini until 100% pass"
+                >
+                    {isAgentRunning ? (
+                        <RefreshCw className="h-3 w-3 animate-spin text-cyan-300" />
+                    ) : (
+                        <Repeat className="h-3 w-3 text-cyan-300" />
+                    )}
+                    <span>{isAgentRunning ? 'Agent Running...' : 'Auto-Test Agent'}</span>
                 </button>
 
                 <button
@@ -1119,6 +1263,19 @@ Ask a question below or click one of the quick actions to get started!`,
                     <span>Explain</span>
                 </button>
             </div>
+
+            {/* Active Agent Loop Progress Banner */}
+            {isAgentRunning && (
+                <div className="bg-gradient-to-r from-cyan-950/60 via-indigo-950/60 to-purple-950/60 border-b border-cyan-500/30 px-3.5 py-2 flex items-center justify-between text-xs text-cyan-200 animate-pulse">
+                    <div className="flex items-center space-x-2">
+                        <RefreshCw className="h-3.5 w-3.5 animate-spin text-cyan-400" />
+                        <span className="font-medium">{agentStatus || 'Agent loop active...'}</span>
+                    </div>
+                    <span className="text-[10px] font-mono uppercase tracking-wider text-cyan-400/80 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">
+                        Auto-Heal
+                    </span>
+                </div>
+            )}
 
             {/* Chat Messages Feed */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-[250px]">

@@ -102,6 +102,74 @@
       }
     },
     {
+      "name": "pause",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "caller",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Boolean"
+      }
+    },
+    {
+      "name": "unpause",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "caller",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Boolean"
+      }
+    },
+    {
+      "name": "setEmergencyPauser",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "caller",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "newPauser",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Boolean"
+      }
+    },
+    {
+      "name": "paused",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Boolean"
+      }
+    },
+    {
       "name": "transfer",
       "pure": false,
       "proof": true,
@@ -248,6 +316,46 @@
       "result-type": {
         "type-name": "Boolean"
       }
+    },
+    {
+      "name": "emergencyWithdraw",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "caller",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "token",
+          "type": {
+            "type-name": "Struct",
+            "name": "ContractAddress",
+            "elements": [
+              {
+                "name": "bytes",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "amount",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 340282366920938463463374607431768211455
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Boolean"
+      }
     }
   ],
   "witnesses": [
@@ -354,6 +462,25 @@
     {
       "name": "owner",
       "index": 7,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "_paused",
+      "index": 8,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Boolean"
+      }
+    },
+    {
+      "name": "_emergencyPauser",
+      "index": 9,
       "exported": true,
       "storage": "Cell",
       "type": {

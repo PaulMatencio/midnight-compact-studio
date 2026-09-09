@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
-// Compact FungibleToken Contract - Optimized & Secured
+// Compact FungibleToken Contract - Optimized & Secured with Emergency Stop
 pragma language_version >= 0.23;
 
 import CompactStandardLibrary;
 
 // Ledger state
 export ledger _balances: Map<Bytes<32>, Uint<128>>;
-// Flattened composite key: [owner, spender] -> allowance
 export ledger _allowances: Map<[Bytes<32>, Bytes<32>], Uint<128>>;
 export ledger _totalSupply: Uint<128>;
 export ledger _maxSupply: Uint<128>;
@@ -14,6 +13,10 @@ export ledger _name: Opaque<"string">;
 export ledger _symbol: Opaque<"string">;
 export ledger _decimals: Uint<8>;
 export ledger owner: Bytes<32>;
+
+// ============ NEW: Emergency Stop State ============
+export ledger _paused: Boolean;
+export ledger _emergencyPauser: Bytes<32>;  // Optional: separate pauser role
 
 // Private witness providing caller secret key
 witness localSecretKey(): Bytes<32>;
@@ -24,7 +27,6 @@ witness localSecretKey(): Bytes<32>;
  */
 circuit authenticate(account: Bytes<32>): [] {
   const sk = localSecretKey();
-  // Domain separation tag + contract address + secret key
   const domainTag = pad(32, "fungible-token:auth");
   const derivedAccount = persistentHash<[Bytes<32>, ContractAddress, Bytes<32>]>([
     domainTag,
@@ -32,6 +34,27 @@ circuit authenticate(account: Bytes<32>): [] {
     sk
   ]);
   assert(derivedAccount == account, "FungibleToken: caller authorization failed");
+}
+
+// ============ NEW: Pause Modifiers ============
+circuit whenNotPaused(): [] {
+  assert(!_paused, "FungibleToken: contract is paused");
+}
+
+circuit whenPaused(): [] {
+  assert(_paused, "FungibleToken: contract is not paused");
+}
+
+circuit onlyOwner(account: Bytes<32>): [] {
+  authenticate(account);
+  assert(disclose(account) == owner, "FungibleToken: only owner can call this");
+}
+
+// ============ NEW: Optional - Only Pauser Role ============
+circuit onlyPauser(account: Bytes<32>): [] {
+  authenticate(account);
+  assert(disclose(account) == _emergencyPauser || disclose(account) == owner, 
+         "FungibleToken: only pauser or owner can call this");
 }
 
 constructor(
@@ -52,6 +75,10 @@ constructor(
   } else {
     _maxSupply = disclose(maxSupply_);
   }
+  
+  // ============ NEW: Initialize paused state ============
+  _paused = false;
+  _emergencyPauser = disclose(initialOwner); // Default to owner
 }
 
 export circuit name(): Opaque<"string"> {
@@ -92,26 +119,73 @@ export circuit allowance(
   return _allowances.lookup(allowanceKey);
 }
 
+// ============ NEW: Pause Functions ============
+
+/**
+ * Pauses all token transfers, approvals, and minting/burning
+ * Can only be called by owner or designated pauser
+ */
+export circuit pause(caller: Bytes<32>): Boolean {
+  onlyPauser(caller);
+  whenNotPaused();
+  _paused = true;
+  return true;
+}
+
+/**
+ * Unpauses the contract
+ * Can only be called by owner or designated pauser
+ */
+export circuit unpause(caller: Bytes<32>): Boolean {
+  onlyPauser(caller);
+  whenPaused();
+  _paused = false;
+  return true;
+}
+
+/**
+ * Optional: Set a separate pauser role
+ * Only callable by owner
+ */
+export circuit setEmergencyPauser(caller: Bytes<32>, newPauser: Bytes<32>): Boolean {
+  onlyOwner(caller);
+  assert(!isZeroKey(newPauser), "FungibleToken: invalid pauser address");
+  _emergencyPauser = disclose(newPauser);
+  return true;
+}
+
+/**
+ * View function to check pause status
+ */
+export circuit paused(): Boolean {
+  return _paused;
+}
+
+// ============ MODIFIED: Transfer with pause check ============
 export circuit transfer(
   caller: Bytes<32>,
   to: Bytes<32>,
   value: Uint<128>
 ): Boolean {
   authenticate(caller);
+  whenNotPaused(); // ============ ADDED ============
   _transfer(caller, to, value);
   return true;
 }
 
+// ============ MODIFIED: Approve with pause check ============
 export circuit approve(
   caller: Bytes<32>,
   spender: Bytes<32>,
   value: Uint<128>
 ): Boolean {
   authenticate(caller);
+  whenNotPaused(); // ============ ADDED ============
   _approve(caller, spender, value);
   return true;
 }
 
+// ============ MODIFIED: TransferFrom with pause check ============
 export circuit transferFrom(
   caller: Bytes<32>,
   fromAccount: Bytes<32>,
@@ -119,29 +193,73 @@ export circuit transferFrom(
   value: Uint<128>
 ): Boolean {
   authenticate(caller);
+  whenNotPaused(); // ============ ADDED ============
   _spendAllowance(fromAccount, caller, value);
   _transfer(fromAccount, to, value);
   return true;
 }
 
+// ============ MODIFIED: Mint with pause check ============
 export circuit mint(
   to: Bytes<32>,
   value: Uint<128>
 ): Boolean {
   authenticate(owner);
+  whenNotPaused(); // ============ ADDED ============
   _mint(to, value);
   return true;
 }
 
+// ============ MODIFIED: Burn with pause check ============
 export circuit burn(
   caller: Bytes<32>,
   value: Uint<128>
 ): Boolean {
   authenticate(caller);
+  whenNotPaused(); // ============ ADDED ============
   _burn(caller, value);
   return true;
 }
 
+// ============ Deriving the contract's account ============ 
+/*
+To identify the contract's own account in _balances 
+(which uses Bytes<32> keys), you can derive a deterministic account representation
+ from kernel.self():
+
+*/
+circuit _contractAccount(): Bytes<32> {
+  const domainTag = pad(32, "fungible-token:contract");
+  return persistentHash<[Bytes<32>, ContractAddress]>([
+    domainTag,
+    kernel.self()
+  ]);
+}
+
+
+// ============ NEW: Emergency Withdrawal (optional) ============
+/**
+ * Allow owner to withdraw tokens from the contract in case of emergency
+ * Only available when paused
+ */
+export circuit emergencyWithdraw(
+  caller: Bytes<32>,
+  token: ContractAddress,
+  amount: Uint<128>
+): Boolean {
+  onlyOwner(caller);
+  whenPaused();
+  
+  // Withdraw strictly to the registered contract owner / treasury, NOT an arbitrary `to` parameter
+  const fromAccount = _contractAccount();
+  const recipient = owner;
+  _transfer(fromAccount, recipient, amount);
+  
+  return true;
+}
+
+
+// Rest of the original contract remains the same...
 circuit _transfer(
   fromAccount: Bytes<32>,
   to: Bytes<32>,
@@ -150,7 +268,6 @@ circuit _transfer(
   assert(!isZeroKey(fromAccount), "FungibleToken: invalid sender");
   assert(!isZeroKey(to), "FungibleToken: invalid receiver");
   if (disclose(fromAccount == to)) {
-    // Self-transfer validation: verify sufficient balance without redundant updates
     const bal = balanceOf(fromAccount);
     assert(bal >= disclose(value), "FungibleToken: insufficient balance");
     return;
@@ -163,9 +280,7 @@ circuit _update(
   to: Bytes<32>,
   value: Uint<128>
 ): [] {
-  
   if (disclose(isZeroKey(fromAccount))) {
-    // Mint operation
     assert(_maxSupply - _totalSupply >= disclose(value), "FungibleToken: supply overflow");
     _totalSupply = (_totalSupply + disclose(value)) as Uint<128>;
   } else {
@@ -175,7 +290,6 @@ circuit _update(
   }
 
   if (disclose(isZeroKey(to))) {
-    // Burn operation
     assert(_totalSupply >= disclose(value), "FungibleToken: supply underflow");
     _totalSupply = (_totalSupply - disclose(value)) as Uint<128>;
   } else {

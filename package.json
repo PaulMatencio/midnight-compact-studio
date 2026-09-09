@@ -10,6 +10,7 @@
     "compile": "compact compile contracts/hello-world.compact contracts/managed/hello-world",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:agent": "tsx scripts/auto-test-agent.ts",
     "build": "tsc --noEmit",
     "dev": "next dev --webpack",
     "next:build": "next build",

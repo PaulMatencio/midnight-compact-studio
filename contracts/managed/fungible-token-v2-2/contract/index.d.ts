@@ -14,6 +14,12 @@ export type ImpureCircuits<PS> = {
   allowance(context: __compactRuntime.CircuitContext<PS>,
             ownerAccount_0: Uint8Array,
             spender_0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
+  pause(context: __compactRuntime.CircuitContext<PS>, caller_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
+  unpause(context: __compactRuntime.CircuitContext<PS>, caller_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
+  setEmergencyPauser(context: __compactRuntime.CircuitContext<PS>,
+                     caller_0: Uint8Array,
+                     newPauser_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
+  paused(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, boolean>;
   transfer(context: __compactRuntime.CircuitContext<PS>,
            caller_0: Uint8Array,
            to_0: Uint8Array,
@@ -33,6 +39,10 @@ export type ImpureCircuits<PS> = {
   burn(context: __compactRuntime.CircuitContext<PS>,
        caller_0: Uint8Array,
        value_0: bigint): __compactRuntime.CircuitResults<PS, boolean>;
+  emergencyWithdraw(context: __compactRuntime.CircuitContext<PS>,
+                    caller_0: Uint8Array,
+                    token_0: { bytes: Uint8Array },
+                    amount_0: bigint): __compactRuntime.CircuitResults<PS, boolean>;
 }
 
 export type ProvableCircuits<PS> = {
@@ -45,6 +55,12 @@ export type ProvableCircuits<PS> = {
   allowance(context: __compactRuntime.CircuitContext<PS>,
             ownerAccount_0: Uint8Array,
             spender_0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
+  pause(context: __compactRuntime.CircuitContext<PS>, caller_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
+  unpause(context: __compactRuntime.CircuitContext<PS>, caller_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
+  setEmergencyPauser(context: __compactRuntime.CircuitContext<PS>,
+                     caller_0: Uint8Array,
+                     newPauser_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
+  paused(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, boolean>;
   transfer(context: __compactRuntime.CircuitContext<PS>,
            caller_0: Uint8Array,
            to_0: Uint8Array,
@@ -64,6 +80,10 @@ export type ProvableCircuits<PS> = {
   burn(context: __compactRuntime.CircuitContext<PS>,
        caller_0: Uint8Array,
        value_0: bigint): __compactRuntime.CircuitResults<PS, boolean>;
+  emergencyWithdraw(context: __compactRuntime.CircuitContext<PS>,
+                    caller_0: Uint8Array,
+                    token_0: { bytes: Uint8Array },
+                    amount_0: bigint): __compactRuntime.CircuitResults<PS, boolean>;
 }
 
 export type PureCircuits = {
@@ -79,6 +99,12 @@ export type Circuits<PS> = {
   allowance(context: __compactRuntime.CircuitContext<PS>,
             ownerAccount_0: Uint8Array,
             spender_0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
+  pause(context: __compactRuntime.CircuitContext<PS>, caller_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
+  unpause(context: __compactRuntime.CircuitContext<PS>, caller_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
+  setEmergencyPauser(context: __compactRuntime.CircuitContext<PS>,
+                     caller_0: Uint8Array,
+                     newPauser_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
+  paused(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, boolean>;
   transfer(context: __compactRuntime.CircuitContext<PS>,
            caller_0: Uint8Array,
            to_0: Uint8Array,
@@ -98,6 +124,10 @@ export type Circuits<PS> = {
   burn(context: __compactRuntime.CircuitContext<PS>,
        caller_0: Uint8Array,
        value_0: bigint): __compactRuntime.CircuitResults<PS, boolean>;
+  emergencyWithdraw(context: __compactRuntime.CircuitContext<PS>,
+                    caller_0: Uint8Array,
+                    token_0: { bytes: Uint8Array },
+                    amount_0: bigint): __compactRuntime.CircuitResults<PS, boolean>;
 }
 
 export type Ledger = {
@@ -121,6 +151,8 @@ export type Ledger = {
   readonly _symbol: string;
   readonly _decimals: bigint;
   readonly owner: Uint8Array;
+  readonly _paused: boolean;
+  readonly _emergencyPauser: Uint8Array;
 }
 
 export type ContractReferenceLocations = any;

@@ -71,6 +71,7 @@ export function ExportDappModal({
                 const data = await res.json();
                 if (data?.success && data?.data?.deployments?.length > 0) {
                     const list: any[] = data.data.deployments;
+                    const cleanName = (contractFilename || '').replace(/\.compact$/i, '').toLowerCase();
                     const exactMatch = list.find((d) => (d.contractType || '').toLowerCase() === cleanName);
                     const matched =
                         exactMatch ||
