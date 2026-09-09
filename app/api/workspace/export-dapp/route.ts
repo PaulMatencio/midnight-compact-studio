@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import JSZip from 'jszip';
 import { getCleanContractBaseName } from '@/src/lib/contract-utils';
+import { container } from '@/src/infrastructure/di/container';
 import {
     MIDNIGHT_CONFIG,
     generateDeploymentConfig,
@@ -12,6 +13,43 @@ import {
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
+
+/**
+ * Resolve the current deployed contract address from deployment storage
+ * if not explicitly provided or if a dummy zero-address placeholder was passed.
+ */
+async function resolveCurrentContractAddress(baseContractName: string, requestedAddress?: string): Promise<string> {
+    const defaultPlaceholder = DEFAULT_DEPLOYMENT_CONFIG.contractAddress || '0000000000000000000000000000000000000000000000000000000000000000';
+    if (requestedAddress && requestedAddress.trim().length > 0 && requestedAddress !== defaultPlaceholder) {
+        return requestedAddress.trim();
+    }
+    try {
+        const deployments = await container.deploymentStorage.getDeployments();
+        if (deployments && deployments.length > 0) {
+            const clean = baseContractName.toLowerCase();
+            // 1. Exact match on contractType
+            const exactMatch = deployments.find((d) => (d.contractType || '').toLowerCase() === clean);
+            if (exactMatch?.contractAddress) {
+                return exactMatch.contractAddress;
+            }
+            // 2. Partial match on contractType or nickname
+            const partialMatch = deployments.find((d) => {
+                const type = (d.contractType || '').toLowerCase();
+                const nick = (d.nickname || '').toLowerCase();
+                return nick.includes(clean) || clean.includes(type) || type.includes(clean);
+            });
+            if (partialMatch?.contractAddress) {
+                return partialMatch.contractAddress;
+            }
+            if (deployments[0]?.contractAddress) {
+                return deployments[0].contractAddress;
+            }
+        }
+    } catch (err) {
+        console.warn('Could not auto-resolve contract address from deployment storage:', err);
+    }
+    return defaultPlaceholder;
+}
 
 /**
  * Generate a comprehensive, self-contained master prompt for Gemini or Claude
@@ -62,8 +100,8 @@ Scaffold and implement a complete, production-grade **React 19 / Next.js (App Ro
 
 ---
 
-### 2. Network & Deployment Configuration
-Use the configuration specified in \`deployment.config.json\` (configured via \`infrastructure/config/midnight-config.ts\`):
+## 2. Network & Deployment Configuration
+Use the configuration specified in \`deployment.config.json\` or \`deployment.json\` (configured via \`infrastructure/config/midnight-config.ts\`):
 - **Contract Name**: \`${baseContractName}\`
 - **Contract Address**: \`${config.contractAddress || DEFAULT_DEPLOYMENT_CONFIG.contractAddress}\`
 - **Network ID**: \`${config.networkId || DEFAULT_DEPLOYMENT_CONFIG.networkId}\`
@@ -98,104 +136,73 @@ Assemble the 5 essential Midnight providers into a unified \`MidnightProvider\`:
 5. **PrivateStateProvider**: In-browser local private state manager for storing off-chain witness data.
 
 #### Module C: Contract Interaction Hooks (\`use${pascalName}.ts\`)
-- **State Subscription Hook**: Subscribes to the on-chain ledger state via RxJS Observable and decodes it using the compiled \`ledger()\` function from \`contract/index.js\`.
-- **Circuit Invocation Functions**:
-  - Wrapper functions for each circuit declared in \`${baseContractName}.compact\`.
-  - Automatically manages:
-    1. Transaction balancing and fee estimation (DUST).
-    2. Zero-Knowledge proof generation (with UI progress indicator).
-    3. Block submission and confirmation polling.
+- Custom React hook wrapping the contract SDK (\`src/client/${baseContractName}-sdk.ts\`).
+- Exposes callable circuit methods, transaction submission lifecycle states (\`syncing\`, \`balancing\`, \`proving\`, \`submitting\`, \`confirmed\`, \`error\`), and real-time state streams.
+- Shows live updates of public ledger state.
 
-#### Module D: UI Components, UX & Dashboard
-1. **Contract Overview Card**: Displays deployed contract address, network status, and live ledger fields.
-2. **Interactive Circuit Actions**:
-   - Clean forms with input validation for every circuit parameter.
-   - Real-time feedback indicators:
-     - \`Preparing Transaction...\`
-     - \`Generating Zero-Knowledge Proof (Client-side / Proof Server)...\`
-     - \`Submitting to Midnight Blockchain...\`
-     - \`Confirmed in Block #...\`
-3. **Activity & Audit Log**: Shows past interactions, transaction hashes, and error diagnostics.
-4. **UX/UI Design Standards**:
-   - Polished dark mode with curated color accents (deep Midnight blues, cyan, and violet highlights).
-   - Clear loading skeletons, error states, and optimistic UI updates where appropriate.
-   - Accessible, mobile-friendly responsive layout with intuitive navigation.
+#### Module D: User Interface Components
+- **Dashboard / Hero Card**: Contract overview displaying current contract address (\`${config.contractAddress}\`), active network (\`${config.networkId}\`), connection status, and public ledger statistics.
+- **Circuit Execution Forms**: Clean, validated input forms for executing circuits (e.g. transfer, mint, query) with instant parameter feedback.
+- **Live Transaction Stepper**: Real-time visual progress showing Proof Generation -> Transaction Balancing -> Block Inclusion -> On-Chain Confirmation with explorer link.
+- **Activity Log / Transaction Feed**: Historical and live transaction receipts with block heights and transaction hashes.
 
 ---
 
-### 4. Implementation Guidelines & Conventions
-- **BigInt Safety**: In Compact runtime, all bounded integer parameters (\`Uint<8>\`, \`Uint<32>\`, \`Uint<64>\`) must be passed as \`bigint\` literals (e.g. \`100n\`).
-- **Return Tuples**: Remember that Compact circuits with no explicit return value return the empty unit tuple \`[]\`.
-- **Witnesses**: Off-chain witness functions in the runtime must strictly adhere to the 2-element tuple pattern \`[nextPrivateState, witnessValue]\`.
-- **Client Artifact Paths**:
-  - Place \`contract/index.js\` and \`contract/index.d.ts\` in \`src/contracts/${baseContractName}/contract/\`.
-  - Place \`zkir/*.zkir\` in \`public/zkir/${baseContractName}/\` so they are accessible by HTTP fetch.
-  - Import the client SDK adapter from \`src/client/${baseContractName}-sdk.ts\`.
-
-Please build a complete, elegant, and fully functional DApp application following this specification!
+## 🚀 Execution Instructions
+1. Inspect the provided TypeScript contract interfaces and artifacts in \`contract/\`, \`sdk/\`, and \`deployment.config.json\`.
+2. Generate all required application source files with complete, working implementations.
+3. Ensure all types, imports, and provider configurations align with the Midnight Network specification.
 `;
 }
 
 /**
- * Collect all relevant files from disk for the specified contract.
+ * Collect all contract-related files from disk to package in ZIP.
  */
-async function collectContractArtifacts(baseContractName: string) {
+async function collectContractArtifacts(baseContractName: string): Promise<{
+    artifacts: { zipPath: string; diskPath: string }[];
+    detectedFiles: string[];
+}> {
     const rootDir = process.cwd();
-    const artifacts: { zipPath: string; diskPath: string; content?: string | Buffer }[] = [];
+    const artifacts: { zipPath: string; diskPath: string }[] = [];
     const detectedFiles: string[] = [];
 
-    // 1. Source Compact Contract
-    const compactCandidates = [
-        path.join(rootDir, 'contracts', `${baseContractName}.compact`),
-        path.join(rootDir, 'contracts', `${baseContractName.toLowerCase()}.compact`),
-    ];
-    for (const p of compactCandidates) {
-        try {
-            await fs.access(p);
-            artifacts.push({ zipPath: `contracts/${path.basename(p)}`, diskPath: p });
-            detectedFiles.push(`contracts/${path.basename(p)}`);
-            break;
-        } catch {}
-    }
-
-    // 2. Managed Contract Runtime (contracts/managed/<contract>/contract/*)
-    const contractDir = path.join(rootDir, 'contracts', 'managed', baseContractName, 'contract');
+    // 1. Original Compact Contract Source
+    const compactPath = path.join(rootDir, 'contracts', `${baseContractName}.compact`);
     try {
-        const entries = await fs.readdir(contractDir);
-        for (const file of entries) {
-            if (file.endsWith('.js') || file.endsWith('.d.ts') || file.endsWith('.cjs')) {
-                const fullPath = path.join(contractDir, file);
-                artifacts.push({ zipPath: `contract/${file}`, diskPath: fullPath });
-                detectedFiles.push(`contract/${file}`);
-            }
+        await fs.access(compactPath);
+        artifacts.push({ zipPath: `contracts/${path.basename(compactPath)}`, diskPath: compactPath });
+        detectedFiles.push(`contracts/${path.basename(compactPath)}`);
+    } catch {}
+
+    // 2. Managed Contract Runtime (index.js, index.d.ts)
+    const managedContractDir = path.join(rootDir, 'contracts', 'managed', baseContractName, 'contract');
+    try {
+        const files = await fs.readdir(managedContractDir);
+        for (const file of files) {
+            const diskPath = path.join(managedContractDir, file);
+            artifacts.push({ zipPath: `contract/${file}`, diskPath });
+            detectedFiles.push(`contract/${file}`);
         }
     } catch {}
 
-    // 3. ZKIR Bytecode Files (contracts/managed/<contract>/zkir/*.zkir)
-    const zkirDir = path.join(rootDir, 'contracts', 'managed', baseContractName, 'zkir');
+    // 3. Managed ZKIR Files
+    const managedZkirDir = path.join(rootDir, 'contracts', 'managed', baseContractName, 'zkir');
     try {
-        const entries = await fs.readdir(zkirDir);
-        for (const file of entries) {
-            if (file.endsWith('.zkir') || file.endsWith('.json')) {
-                const fullPath = path.join(zkirDir, file);
-                artifacts.push({ zipPath: `zkir/${file}`, diskPath: fullPath });
-                detectedFiles.push(`zkir/${file}`);
-            }
+        const files = await fs.readdir(managedZkirDir);
+        for (const file of files) {
+            const diskPath = path.join(managedZkirDir, file);
+            artifacts.push({ zipPath: `zkir/${file}`, diskPath });
+            detectedFiles.push(`zkir/${file}`);
         }
     } catch {}
 
     // 4. Client SDK Adapter
-    const sdkCandidates = [
-        path.join(rootDir, 'src', 'client', `${baseContractName}-sdk.ts`),
-        path.join(rootDir, 'src', 'client', `${baseContractName}-types.ts`),
-    ];
-    for (const p of sdkCandidates) {
-        try {
-            await fs.access(p);
-            artifacts.push({ zipPath: `sdk/${path.basename(p)}`, diskPath: p });
-            detectedFiles.push(`sdk/${path.basename(p)}`);
-        } catch {}
-    }
+    const sdkPath = path.join(rootDir, 'src', 'client', `${baseContractName}-sdk.ts`);
+    try {
+        await fs.access(sdkPath);
+        artifacts.push({ zipPath: `sdk/${path.basename(sdkPath)}`, diskPath: sdkPath });
+        detectedFiles.push(`sdk/${path.basename(sdkPath)}`);
+    } catch {}
 
     // 5. Documentation
     const docPath = path.join(rootDir, 'docs', `${baseContractName}-sdk.md`);
@@ -247,7 +254,10 @@ export async function GET(req: NextRequest) {
         const { artifacts, detectedFiles } = await collectContractArtifacts(baseContractName);
 
         const queryOverride: Partial<DeploymentConfig> = {};
-        if (searchParams.get('contractAddress')) queryOverride.contractAddress = searchParams.get('contractAddress')!;
+        const rawAddress = searchParams.get('contractAddress');
+        const resolvedAddress = await resolveCurrentContractAddress(baseContractName, rawAddress || undefined);
+        queryOverride.contractAddress = resolvedAddress;
+
         if (searchParams.get('networkId')) queryOverride.networkId = searchParams.get('networkId')!;
         if (searchParams.get('indexerUrl')) queryOverride.indexerUrl = searchParams.get('indexerUrl')!;
         if (searchParams.get('indexerWsUrl')) queryOverride.indexerWsUrl = searchParams.get('indexerWsUrl')!;
@@ -257,7 +267,6 @@ export async function GET(req: NextRequest) {
         if (searchParams.get('explorerUrl')) queryOverride.explorerUrl = searchParams.get('explorerUrl')!;
 
         const config = generateDeploymentConfig(baseContractName, queryOverride);
-
         const masterPrompt = generateGeminiDAppPrompt(baseContractName, config, detectedFiles);
 
         if (isPreview) {
@@ -270,10 +279,8 @@ export async function GET(req: NextRequest) {
             });
         }
 
-        // Build ZIP stream
         const zip = new JSZip();
 
-        // Add detected files from disk
         for (const item of artifacts) {
             try {
                 const data = await fs.readFile(item.diskPath);
@@ -283,8 +290,10 @@ export async function GET(req: NextRequest) {
             }
         }
 
-        // Add deployment configuration JSON
-        zip.file('deployment.config.json', JSON.stringify(config, null, 2));
+        // Add deployment configuration JSON (both deployment.config.json and deployment.json)
+        const configJson = JSON.stringify(config, null, 2);
+        zip.file('deployment.config.json', configJson);
+        zip.file('deployment.json', configJson);
 
         // Add Master Gemini Prompt
         zip.file('GEMINI_DAPP_PROMPT.md', masterPrompt);
@@ -296,7 +305,7 @@ This bundle contains all compiled smart contract artifacts, ZKIR circuit bytecod
 
 ## Contents:
 - \`GEMINI_DAPP_PROMPT.md\`: Master prompt for Gemini to scaffold your React 19 / Next.js frontend!
-- \`deployment.config.json\`: Midnight network and contract connection parameters (generated from midnight-config.ts).
+- \`deployment.config.json\` / \`deployment.json\`: Midnight network and contract connection parameters (including current contractAddress).
 - \`contract/\`: Compiled contract runtime (\`index.js\`, \`index.d.ts\`).
 - \`zkir/\`: Circuit Zero-Knowledge Intermediate Representation files.
 - \`sdk/\`: High-level TypeScript client adapter.
@@ -310,7 +319,6 @@ Exported from Midnight Compact Studio.
         zip.file('README.md', readmeContent);
 
         const zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-
         const filename = `${baseContractName}-dapp-bundle.zip`;
 
         return new NextResponse(zipBuffer as any, {
@@ -341,7 +349,14 @@ export async function POST(req: NextRequest) {
         const rawContract = body.contract || 'fungible-token';
         const baseContractName = getCleanContractBaseName(rawContract);
 
-        const config = generateDeploymentConfig(baseContractName, body.deploymentConfig);
+        const deploymentConfigOverride = body.deploymentConfig || {};
+        const resolvedAddress = await resolveCurrentContractAddress(
+            baseContractName,
+            deploymentConfigOverride.contractAddress
+        );
+        deploymentConfigOverride.contractAddress = resolvedAddress;
+
+        const config = generateDeploymentConfig(baseContractName, deploymentConfigOverride);
 
         const { artifacts, detectedFiles } = await collectContractArtifacts(baseContractName);
         const masterPrompt = generateGeminiDAppPrompt(baseContractName, config, detectedFiles);
@@ -357,7 +372,9 @@ export async function POST(req: NextRequest) {
             }
         }
 
-        zip.file('deployment.config.json', JSON.stringify(config, null, 2));
+        const configJson = JSON.stringify(config, null, 2);
+        zip.file('deployment.config.json', configJson);
+        zip.file('deployment.json', configJson);
         zip.file('GEMINI_DAPP_PROMPT.md', masterPrompt);
 
         const readmeContent = `# ${baseContractName} - Midnight DApp Export Bundle
@@ -366,7 +383,7 @@ This bundle contains all compiled smart contract artifacts, ZKIR circuit bytecod
 
 ## Contents:
 - \`GEMINI_DAPP_PROMPT.md\`: Master prompt for Gemini to scaffold your React 19 / Next.js frontend!
-- \`deployment.config.json\`: Midnight network and contract connection parameters (generated from midnight-config.ts).
+- \`deployment.config.json\` / \`deployment.json\`: Midnight network and contract connection parameters (including current contractAddress).
 - \`contract/\`: Compiled contract runtime (\`index.js\`, \`index.d.ts\`).
 - \`zkir/\`: Circuit Zero-Knowledge Intermediate Representation files.
 - \`sdk/\`: High-level TypeScript client adapter.

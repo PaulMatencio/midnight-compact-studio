@@ -1,24 +1,17 @@
-+-----------------------------------------------------------------------------------+
-|                                 Zero-Knowledge Layer                              |
-|                                                                                   |
-|  [ Private Key (SK) ] ---> ( localSecretKey witness )                             |
-|                                   |                                               |
-|                                   v                                               |
-|                    [ persistentHash(domain, self, SK) ] == caller account?        |
-|                                   |                                               |
-|                                   v                                               |
-|                      assert( derived == caller )                                  |
-+-----------------------------------+-----------------------------------------------+
-                                    |
-                                    v
-+-----------------------------------+-----------------------------------------------+
-|                                Ledger State                                       |
-|                                                                                   |
-|  - _balances: Map<Bytes<32>, Uint<128>>                                           |
-|  - _allowances: Map<[Bytes<32>, Bytes<32>], Uint<128>>                            |
-|  - _totalSupply: Uint<128>                                                        |
-|  - _name: Opaque<"string">                                                        |
-|  - _symbol: Opaque<"string">                                                      |
-|  - _decimals: Uint<8>                                                             |
-|  - owner: Bytes<32>                                                               |
-+-----------------------------------------------------------------------------------+
++------------------------------------------+
+                      |       FungibleTokenV22 Architecture      |
+                      +------------------------------------------+
+                                           |
+                   +-----------------------+-----------------------+
+                   |                                               |
+                   v                                               v
+        +----------------------+                       +----------------------+
+        | On-Chain State       |                       | Zero-Knowledge Proofs|
+        +----------------------+                       +----------------------+
+        | - _balances (Map)    |                       | - authenticate()     |
+        | - _allowances (Map)  |                       |   * Witness: SK      |
+        | - _totalSupply       |                       |   * Domain-sep hash  |
+        | - _maxSupply         |                       |   * On-chain address |
+        | - _name, _symbol     |                       | - transfer / mint /  |
+        | - _decimals, owner   |                       |   burn / approve     |
+        +----------------------+                       +----------------------+

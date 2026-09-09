@@ -1,140 +1,150 @@
-# Part 1: Comprehensive SDK Documentation
+# Part 1: Comprehensive Technical Documentation
 
 ## 1. Contract Overview & Architecture
 
-The `fungible-token-v2-2` contract implements a privacy-preserving, zero-knowledge fungible token standard on the Midnight blockchain. It enforces caller authorization through zero-knowledge proofs derived from private secret keys, without disclosing private keys on the public ledger.
+The `fungible-token-v2-2` smart contract implements a privacy-preserving, zero-knowledge authenticated fungible token standard on the Midnight blockchain. It allows token issuance, transfers, allowances, minting, and burning while leveraging off-chain witness proofs for caller authentication.
 
 ```
-+-----------------------------------------------------------------------------------+
-|                                 Zero-Knowledge Layer                              |
-|                                                                                   |
-|  [ Private Key (SK) ] ---> ( localSecretKey witness )                             |
-|                                   |                                               |
-|                                   v                                               |
-|                    [ persistentHash(domain, self, SK) ] == caller account?        |
-|                                   |                                               |
-|                                   v                                               |
-|                      assert( derived == caller )                                  |
-+-----------------------------------+-----------------------------------------------+
-                                    |
-                                    v
-+-----------------------------------+-----------------------------------------------+
-|                                Ledger State                                       |
-|                                                                                   |
-|  - _balances: Map<Bytes<32>, Uint<128>>                                           |
-|  - _allowances: Map<[Bytes<32>, Bytes<32>], Uint<128>>                            |
-|  - _totalSupply: Uint<128>                                                        |
-|  - _name: Opaque<"string">                                                        |
-|  - _symbol: Opaque<"string">                                                      |
-|  - _decimals: Uint<8>                                                             |
-|  - owner: Bytes<32>                                                               |
-+-----------------------------------------------------------------------------------+
+                      +------------------------------------------+
+                      |       FungibleTokenV22 Architecture      |
+                      +------------------------------------------+
+                                           |
+                   +-----------------------+-----------------------+
+                   |                                               |
+                   v                                               v
+        +----------------------+                       +----------------------+
+        | On-Chain State       |                       | Zero-Knowledge Proofs|
+        +----------------------+                       +----------------------+
+        | - _balances (Map)    |                       | - authenticate()     |
+        | - _allowances (Map)  |                       |   * Witness: SK      |
+        | - _totalSupply       |                       |   * Domain-sep hash  |
+        | - _maxSupply         |                       |   * On-chain address |
+        | - _name, _symbol     |                       | - transfer / mint /  |
+        | - _decimals, owner   |                       |   burn / approve     |
+        +----------------------+                       +----------------------+
 ```
 
 ### 1.1 Public Ledger State Schema
 
-| Field | Compact Type | Description |
-| :--- | :--- | :--- |
-| `_balances` | `Map<Bytes<32>, Uint<128>>` | Ledger balance map keyed by 32-byte account identities. |
-| `_allowances` | `Map<[Bytes<32>, Bytes<32>], Uint<128>>` | Composite key mapping `[owner, spender]` to authorized allowance. |
-| `_totalSupply` | `Uint<128>` | Total circulating token supply. |
-| `_name` | `Opaque<"string">` | Token descriptive name (e.g., `"Midnight USD"`). |
-| `_symbol` | `Opaque<"string">` | Token ticker symbol (e.g., `"MUSD"`). |
-| `_decimals` | `Uint<8>` | Token decimal precision (e.g., `18`). |
-| `owner` | `Bytes<32>` | 32-byte identifier of the contract administrator/minter. |
+The public ledger state stores all global token metadata, supply constraints, account balances, and allowances:
+
+| State Field | Compact Type | TypeScript Type | Description |
+| :--- | :--- | :--- | :--- |
+| `_balances` | `Map<Bytes<32>, Uint<128>>` | `ContractLedger['_balances']` | Mapping of 32-byte account addresses to balance amounts. |
+| `_allowances` | `Map<[Bytes<32>, Bytes<32>], Uint<128>>` | `ContractLedger['_allowances']` | Flattened composite key `[owner, spender]` to authorized allowance. |
+| `_totalSupply` | `Uint<128>` | `bigint` | Current circulating supply of tokens. |
+| `_maxSupply` | `Uint<128>` | `bigint` | Maximum cap on token supply (`2^128 - 1` if uncapped). |
+| `_name` | `Opaque<"string">` | `string` | Human-readable token name. |
+| `_symbol` | `Opaque<"string">` | `string` | Ticker symbol of the token. |
+| `_decimals` | `Uint<8>` | `bigint` / `number` | Token decimal precision. |
+| `owner` | `Bytes<32>` | `Uint8Array` | 32-byte identifier of the contract administrator / minter. |
 
 ### 1.2 Private State & Witness Specification
 
-- **Witness Function**: `witness localSecretKey(): Bytes<32>;`
-- **Witness Signature in TypeScript**: `(context: WitnessContext<ContractLedger, PS>) => [PS, Uint8Array]`
-- **Authentication Mechanism**:
-  The contract verifies that the prover possesses the private key corresponding to `caller` (or `owner`) by verifying:
+Authentication relies on client-side zero-knowledge proofs rather than plaintext on-chain signatures.
+
+- **Witness Declaration**: `witness localSecretKey(): Bytes<32>;`
+- **Private State (`PS`)**: Contains `localSecretKey: Uint8Array` (32 bytes).
+- **Authentication Derivation**:
   $$\text{derivedAccount} = \text{persistentHash}([\text{pad}(32, \text{"fungible-token:auth"}), \text{kernel.self}(), \text{sk}])$$
-  The secret key never leaves the prover's local client runtime.
+  The circuit checks `assert(derivedAccount == account)` to ensure the transaction submitter possesses the preimage secret key without publishing it.
 
-### 1.3 Available Circuits & Enforced Constraints
+### 1.3 Exported Circuits & Constraint Rules
 
-| Circuit | Arguments | Return | Invariant / Assertions |
-| :--- | :--- | :--- | :--- |
-| `name()` | `()` | `string` | Read-only access to `_name`. |
-| `symbol()` | `()` | `string` | Read-only access to `_symbol`. |
-| `decimals()` | `()` | `bigint` | Read-only access to `_decimals`. |
-| `totalSupply()` | `()` | `bigint` | Read-only access to `_totalSupply`. |
-| `balanceOf(account)` | `Bytes<32>` | `bigint` | Returns account balance, or `0` if unset. |
-| `allowance(owner, spender)`| `Bytes<32>, Bytes<32>` | `bigint` | Returns approved spending allowance. |
-| `transfer(caller, to, value)` | `Bytes<32>, Bytes<32>, Uint<128>` | `boolean` | Checks caller auth, non-zero addresses, sender balance $\ge \text{value}$. |
-| `approve(caller, spender, value)`| `Bytes<32>, Bytes<32>, Uint<128>` | `boolean` | Checks caller auth, non-zero addresses, writes allowance. |
-| `transferFrom(caller, from, to, value)` | `Bytes<32>, Bytes<32>, Bytes<32>, Uint<128>` | `boolean` | Checks caller auth, allowance $\ge \text{value}$, balance $\ge \text{value}$, decrements allowance. |
-| `mint(to, value)` | `Bytes<32>, Uint<128>` | `boolean` | Authenticates contract `owner`, prevents $\text{supply} + \text{value} > 2^{128} - 1$. |
-| `burn(caller, value)` | `Bytes<32>, Uint<128>` | `boolean` | Checks caller auth, balance $\ge \text{value}$, decrements supply. |
+1. `name(): Opaque<"string">`, `symbol(): Opaque<"string">`, `decimals(): Uint<8>`, `maxSupply(): Uint<128>`, `totalSupply(): Uint<128>`: Pure views over ledger parameters.
+2. `balanceOf(account: Bytes<32>): Uint<128>`: Returns account balance or `0` if not present.
+3. `allowance(ownerAccount: Bytes<32>, spender: Bytes<32>): Uint<128>`: Returns current allowance or `0` if not set.
+4. `transfer(caller: Bytes<32>, to: Bytes<32>, value: Uint<128>): Boolean`:
+   - Authenticates `caller`.
+   - Checks non-zero destination and sender.
+   - Enforces `balances[caller] >= value`.
+5. `approve(caller: Bytes<32>, spender: Bytes<32>, value: Uint<128>): Boolean`:
+   - Authenticates `caller`.
+   - Sets `_allowances[[caller, spender]] = value`.
+6. `transferFrom(caller: Bytes<32>, fromAccount: Bytes<32>, to: Bytes<32>, value: Uint<128>): Boolean`:
+   - Authenticates `caller` (the spender).
+   - Validates and decreases `_allowances[[fromAccount, caller]]` (unless max uint128).
+   - Transfers `value` from `fromAccount` to `to`.
+7. `mint(to: Bytes<32>, value: Uint<128>): Boolean`:
+   - Authenticates `owner`.
+   - Checks `_totalSupply + value <= _maxSupply`.
+   - Increases `_totalSupply` and `_balances[to]`.
+8. `burn(caller: Bytes<32>, value: Uint<128>): Boolean`:
+   - Authenticates `caller`.
+   - Decreases `_balances[caller]` and `_totalSupply`.
 
 ---
 
 ## 2. Prerequisites & Installation
 
-To install all dependencies required by the SDK, create and execute `scripts/fungible-token-v2-2-install.sh`:
+To install dependencies and prepare the build environment, create and run `scripts/fungible-token-v2-2-install.sh`:
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Ensure package.json exists
-if [ ! -f "package.json" ]; then
-  npm init -y
-fi
+npm install --save \
+  @midnight-ntwrk/compact-runtime \
+  @midnight-ntwrk/compact-js
 
-# Install runtime dependencies
-npm install \
-  @midnight-ntwrk/compact-runtime@^0.7.0 \
-  @midnight-ntwrk/compact-js@^0.7.0
-
-# Install development dependencies
 npm install --save-dev \
-  typescript@^5.4.0 \
-  tsx@^4.7.0 \
-  @types/node@^20.11.0
+  typescript \
+  tsx \
+  @types/node
 ```
 
 ---
 
 ## 3. API Reference
 
-### `FungibleTokenV22Client<PS>`
+### `FungibleTokenV22Client<PS extends FungibleTokenV22PrivateState>`
 
-```typescript
-class FungibleTokenV22Client<PS extends FungibleTokenV22PrivateState = FungibleTokenV22PrivateState>
-```
+#### `constructor(witnesses?: FungibleTokenV22Witnesses<PS>)`
+Instantiates the client bound to witness implementations.
 
-#### Constructor
-- `new FungibleTokenV22Client(witnesses: FungibleTokenV22Witnesses<PS>)`
-  Instantiates the managed contract wrapper with the specified witness handlers.
+#### `initialState(context, initialOwner, name, symbol, decimals, maxSupply)`
+Initializes state for contract deployment.
+- **Parameters**:
+  - `context: ConstructorContext<PS>`: Deployment context with initial private state.
+  - `initialOwner: Uint8Array`: 32-byte public identifier of the owner.
+  - `name: string`: Token name.
+  - `symbol: string`: Token symbol.
+  - `decimals: bigint | number`: Decimals (0 - 255).
+  - `maxSupply: bigint`: Maximum supply limit (`0n` for max uint128).
+- **Returns**: `ConstructorResult<PS>`.
 
-#### Lifecycle Methods
-- `initialState(context: ConstructorContext<PS>, initialOwner: Uint8Array, name: string, symbol: string, decimals: number | bigint): ConstructorResult<PS>`
-  Executes contract initialization and returns initial state and context.
+#### `transfer(context, caller, to, value)`
+Transfers tokens from `caller` to `to`.
+- **Returns**: `CircuitResults<PS, boolean>`.
+- **Errors**: `"FungibleToken: caller authorization failed"`, `"FungibleToken: insufficient balance"`.
 
-#### Circuit Invocations
-- `mint(context: CircuitContext<PS>, to: Uint8Array, value: bigint): CircuitResults<PS, boolean>`
-- `burn(context: CircuitContext<PS>, caller: Uint8Array, value: bigint): CircuitResults<PS, boolean>`
-- `transfer(context: CircuitContext<PS>, caller: Uint8Array, to: Uint8Array, value: bigint): CircuitResults<PS, boolean>`
-- `approve(context: CircuitContext<PS>, caller: Uint8Array, spender: Uint8Array, value: bigint): CircuitResults<PS, boolean>`
-- `transferFrom(context: CircuitContext<PS>, caller: Uint8Array, fromAccount: Uint8Array, to: Uint8Array, value: bigint): CircuitResults<PS, boolean>`
-- `balanceOf(context: CircuitContext<PS>, account: Uint8Array): CircuitResults<PS, bigint>`
-- `allowance(context: CircuitContext<PS>, ownerAccount: Uint8Array, spender: Uint8Array): CircuitResults<PS, bigint>`
-- `totalSupply(context: CircuitContext<PS>): CircuitResults<PS, bigint>`
-- `name(context: CircuitContext<PS>): CircuitResults<PS, string>`
-- `symbol(context: CircuitContext<PS>): CircuitResults<PS, string>`
-- `decimals(context: CircuitContext<PS>): CircuitResults<PS, bigint>`
+#### `approve(context, caller, spender, value)`
+Sets spender allowance for `caller`.
+- **Returns**: `CircuitResults<PS, boolean>`.
 
-#### Ledger Query
-- `queryLedgerStateFromRaw(rawState: StateValue | ChargedState | unknown): FungibleTokenV22LedgerState`
-  Decodes raw on-chain state into typed ledger fields.
+#### `transferFrom(context, caller, fromAccount, to, value)`
+Spends allowance to transfer tokens between accounts.
+- **Returns**: `CircuitResults<PS, boolean>`.
+- **Errors**: `"FungibleToken: insufficient allowance"`.
+
+#### `mint(context, to, value)`
+Mints tokens to `to` (owner only).
+- **Returns**: `CircuitResults<PS, boolean>`.
+- **Errors**: `"FungibleToken: supply overflow"`.
+
+#### `burn(context, caller, value)`
+Burns tokens from `caller`.
+- **Returns**: `CircuitResults<PS, boolean>`.
+- **Errors**: `"FungibleToken: supply underflow"`.
+
+#### `queryLedgerStateFromRaw(rawState)`
+Parses a raw runtime state or charged state into a typed `FungibleTokenV22LedgerState`.
 
 ---
 
 ## 4. Step-by-Step Quickstart & Usage Walkthrough
 
-Save the following code as `examples/fungible-token-v2-2-example.ts`:
+Save the following runnable script as `examples/fungible-token-v2-2-example.ts`:
 
 ```typescript
 /**
@@ -152,92 +162,117 @@ import {
 import {
   FungibleTokenV22Client,
   type FungibleTokenV22PrivateState,
-  type FungibleTokenV22Witnesses,
+  createDefaultWitnesses,
 } from '../src/client/fungible-token-v2-2-sdk.js';
 
-// Setup Mock Addresses and Keys (32-byte hex strings)
-const coinPublicKey = '01'.repeat(32);
-const contractAddress = '00'.repeat(32);
-
-// Mock private state holding caller secret keys
-const ownerSecretKey = new Uint8Array(32).fill(0xaa);
-const aliceSecretKey = new Uint8Array(32).fill(0xbb);
-
-let privateState: FungibleTokenV22PrivateState = {
-  secretKey: ownerSecretKey,
-};
-
-// Implement witnesses
-const witnesses: FungibleTokenV22Witnesses<FungibleTokenV22PrivateState> = {
-  localSecretKey: ({ privateState }) => [privateState, privateState.secretKey],
-};
-
 async function main() {
-  console.log('--- Initializing FungibleTokenV22 Contract ---');
-  const client = new FungibleTokenV22Client(witnesses);
+  console.log('=== FungibleTokenV22 Client SDK Walkthrough ===\n');
 
-  // 1. Initialize Contract State
-  const initialOwnerAddress = new Uint8Array(32).fill(0x11);
+  // 1. Setup mock keys and 32-byte addresses
+  const coinPublicKey = '01'.repeat(32);
+  const contractAddress = '00'.repeat(32);
+
+  const ownerSecretKey = new Uint8Array(32).fill(0xaa);
+  const userSecretKey = new Uint8Array(32).fill(0xbb);
+
+  // In production, derive public identity using persistentHash([pad(32, "fungible-token:auth"), contractAddress, sk])
+  // For simulation, we assign deterministic 32-byte account representations:
+  const ownerAddress = new Uint8Array(32).fill(0x11);
+  const userAddress = new Uint8Array(32).fill(0x22);
+
+  // 2. Initialize private state and SDK Client
+  let ownerPrivateState: FungibleTokenV22PrivateState = {
+    localSecretKey: ownerSecretKey,
+  };
+
+  let userPrivateState: FungibleTokenV22PrivateState = {
+    localSecretKey: userSecretKey,
+  };
+
+  const client = new FungibleTokenV22Client(createDefaultWitnesses());
+
+  // 3. Initialize Contract (Constructor)
+  console.log('1. Deploying contract...');
   const constructorCtx: ConstructorContext<FungibleTokenV22PrivateState> =
-    CompactRuntime.createConstructorContext(privateState, coinPublicKey);
+    CompactRuntime.createConstructorContext(ownerPrivateState, coinPublicKey);
 
   const initResult = client.initialState(
     constructorCtx,
-    initialOwnerAddress,
-    'Midnight USD',
-    'MUSD',
-    18n
+    ownerAddress,
+    'Midnight Shield Token',
+    'MST',
+    18n,
+    1_000_000_000n * 10n ** 18n // 1 Billion cap
   );
 
-  privateState = initResult.currentPrivateState;
   let currentChargedState = initResult.currentContractState.data;
+  ownerPrivateState = initResult.currentPrivateState;
 
-  console.log('Contract successfully initialized.');
   let ledgerState = client.queryLedgerStateFromRaw(currentChargedState);
-  console.log(`Token Name: ${ledgerState._name}`);
-  console.log(`Token Symbol: ${ledgerState._symbol}`);
-  console.log(`Decimals: ${ledgerState._decimals}`);
-  console.log(`Initial Total Supply: ${ledgerState._totalSupply}`);
+  console.log('   Token Name    :', ledgerState._name);
+  console.log('   Token Symbol  :', ledgerState._symbol);
+  console.log('   Total Supply  :', ledgerState._totalSupply.toString());
 
-  // 2. Query Metadata Circuit
+  // 4. Mint Tokens as Owner
+  console.log('\n2. Minting 1,000 MST to User...');
   let circuitCtx: CircuitContext<FungibleTokenV22PrivateState> =
     CompactRuntime.createCircuitContext(
       contractAddress,
       coinPublicKey,
       currentChargedState,
-      privateState
+      ownerPrivateState
     );
 
-  const nameResult = client.name(circuitCtx);
-  currentChargedState = nameResult.context.currentQueryContext.state;
-  console.log(`Queried name() circuit: ${nameResult.result}`);
+  const mintAmount = 1000n * 10n ** 18n;
+  const mintResult = client.mint(circuitCtx, userAddress, mintAmount);
 
-  // 3. Query Balance
+  currentChargedState = mintResult.context.currentQueryContext.state;
+  ownerPrivateState = mintResult.context.currentPrivateState;
+
+  ledgerState = client.queryLedgerStateFromRaw(currentChargedState);
+  console.log('   Total Supply After Mint:', ledgerState._totalSupply.toString());
+
+  // 5. Transfer Tokens (User -> Owner)
+  console.log('\n3. User transferring 250 MST back to Owner...');
   circuitCtx = CompactRuntime.createCircuitContext(
     contractAddress,
     coinPublicKey,
     currentChargedState,
-    privateState
+    userPrivateState
   );
-  const aliceAddress = new Uint8Array(32).fill(0x22);
-  const balResult = client.balanceOf(circuitCtx, aliceAddress);
-  currentChargedState = balResult.context.currentQueryContext.state;
-  console.log(`Alice Balance: ${balResult.result}`);
+
+  const transferAmount = 250n * 10n ** 18n;
+  const transferResult = client.transfer(circuitCtx, userAddress, ownerAddress, transferAmount);
+
+  currentChargedState = transferResult.context.currentQueryContext.state;
+  userPrivateState = transferResult.context.currentPrivateState;
+
+  // 6. Inspect Balances
+  circuitCtx = CompactRuntime.createCircuitContext(
+    contractAddress,
+    coinPublicKey,
+    currentChargedState,
+    userPrivateState
+  );
+
+  const userBalResult = client.balanceOf(circuitCtx, userAddress);
+  const ownerBalResult = client.balanceOf(userBalResult.context, ownerAddress);
+
+  console.log('   User Balance :', userBalResult.result.toString());
+  console.log('   Owner Balance:', ownerBalResult.result.toString());
+  console.log('\n=== Walkthrough completed successfully ===');
 }
 
-main().catch((err) => {
-  console.error('Execution failed:', err);
-  process.exit(1);
-});
+main().catch(console.error);
 ```
 
 ---
 
 ## 5. Privacy & Security Notes
 
-1. **Secret Key Isolation**: The `localSecretKey` witness returns a private `Uint8Array`. Ensure it is held solely in volatile memory and is never logged, exported, or persisted in unencrypted client storage.
-2. **Domain Separation**: Account authentication uses a fixed 32-byte domain tag (`"fungible-token:auth"`) combined with `kernel.self()`. This ensures secret keys cannot be reused across different contracts or networks.
-3. **Public Disclosures**: The `disclose(...)` operations in the Compact contract reveal transfer amounts, balances, and public addresses on the public ledger. Keep this in mind when designing high-privacy workflows.
+1. **Witness Confidentiality**: The `localSecretKey` witness is never written to public ledger state or exposed on-chain. It stays in off-chain execution memory during zero-knowledge proof generation.
+2. **Domain Separation**: Account authentication uses `pad(32, "fungible-token:auth")` combined with `kernel.self()` (the contract address) and `localSecretKey`. This prevents replay attacks across different contract deployments.
+3. **State Updates & `disclose()`**: All values assigned to public ledger maps (`_balances`, `_allowances`) or aggregates (`_totalSupply`) must be explicitly disclosed in Compact circuits to allow validators to verify state transitions.
 
 ---
 
@@ -245,9 +280,8 @@ main().catch((err) => {
 
 ```typescript
 /**
- * Production TypeScript Client SDK for `fungible-token-v2-2` Compact Smart Contract.
- *
- * @packageDocumentation
+ * Production TypeScript Client SDK for FungibleTokenV22 (fungible-token-v2-2.compact)
+ * File: src/client/fungible-token-v2-2-sdk.ts
  */
 
 import {
@@ -269,180 +303,157 @@ import {
 } from '../../contracts/managed/fungible-token-v2-2/contract/index.js';
 
 /**
- * Ledger state structure mirroring the on-chain storage.
+ * Off-chain private state interface required for witness generation.
+ */
+export interface FungibleTokenV22PrivateState {
+  /** 32-byte secret key used to derive on-chain account address and authenticate operations */
+  readonly localSecretKey: Uint8Array;
+}
+
+/**
+ * Witness implementation mapping for FungibleTokenV22.
+ * Each witness returns a tuple of [updatedPrivateState, witnessOutput].
+ */
+export type FungibleTokenV22Witnesses<PS extends FungibleTokenV22PrivateState> = {
+  localSecretKey: (context: WitnessContext<ContractLedger, PS>) => [PS, Uint8Array];
+};
+
+/**
+ * Strongly typed representation of the on-chain ledger state.
  */
 export type FungibleTokenV22LedgerState = ContractLedger;
 
 /**
- * Base private state interface for the Fungible Token client.
+ * Factory for creating default witness implementations.
  */
-export interface FungibleTokenV22PrivateState {
-  /** 32-byte caller private secret key used for account authentication */
-  readonly secretKey: Uint8Array;
-  /** Optional extensible properties */
-  readonly [key: string]: unknown;
+export function createDefaultWitnesses<
+  PS extends FungibleTokenV22PrivateState
+>(): FungibleTokenV22Witnesses<PS> {
+  return {
+    localSecretKey: (context: WitnessContext<ContractLedger, PS>): [PS, Uint8Array] => {
+      if (!context.privateState || !context.privateState.localSecretKey) {
+        throw new Error('FungibleTokenV22Witnesses: localSecretKey missing in privateState');
+      }
+      return [context.privateState, context.privateState.localSecretKey];
+    },
+  };
 }
 
 /**
- * Strongly typed witness declarations for `fungible-token-v2-2`.
- *
- * Each witness receives a `WitnessContext` and must return a tuple `[PS, T]`.
- */
-export interface FungibleTokenV22Witnesses<PS extends FungibleTokenV22PrivateState = FungibleTokenV22PrivateState> {
-  /**
-   * Retrieves the caller's private 32-byte secret key for ZK authentication.
-   *
-   * @param context - The execution witness context containing private state and query context.
-   * @returns A tuple containing `[updatedPrivateState, secretKeyBytes]`.
-   */
-  readonly localSecretKey: (
-    context: WitnessContext<ContractLedger, PS>
-  ) => [PS, Uint8Array];
-}
-
-/**
- * Production-grade Client SDK for interacting with the `fungible-token-v2-2` smart contract.
+ * Production-grade client SDK for interacting with the FungibleTokenV22 smart contract.
  */
 export class FungibleTokenV22Client<PS extends FungibleTokenV22PrivateState = FungibleTokenV22PrivateState> {
-  private readonly contract: ManagedContract<PS>;
+  protected readonly contract: ManagedContract<PS>;
 
   /**
-   * Constructs an instance of the `FungibleTokenV22Client`.
-   *
-   * @param witnesses - The witness implementation object.
+   * Initializes the FungibleTokenV22 client with witness providers.
+   * @param witnesses Optional custom witness implementations.
    */
-  constructor(witnesses: FungibleTokenV22Witnesses<PS>) {
-    // Map to the generated compiler contract witnesses interface
-    const contractWitnesses: ContractWitnesses<PS> = {
+  constructor(witnesses: FungibleTokenV22Witnesses<PS> = createDefaultWitnesses<PS>()) {
+    const witnessAdapter: ContractWitnesses<PS> = {
       localSecretKey: (context: WitnessContext<ContractLedger, PS>): [PS, Uint8Array] => {
         return witnesses.localSecretKey(context);
       },
     };
-
-    this.contract = new ManagedContract<PS>(contractWitnesses);
+    this.contract = new ManagedContract<PS>(witnessAdapter);
   }
 
   /**
-   * Initializes the contract state with constructor arguments.
+   * Evaluates the contract constructor to produce initial ledger and private states.
    *
-   * @param context - The constructor initialization context.
-   * @param initialOwner - The 32-byte address of the contract administrator/owner.
-   * @param name - The descriptive token name.
-   * @param symbol - The token symbol / ticker.
-   * @param decimals - The decimal precision (0 - 255).
-   * @returns The constructor execution result containing initial ledger and private states.
+   * @param context Runtime constructor context containing deployer private state.
+   * @param initialOwner 32-byte public identifier of the contract owner.
+   * @param name Token name string.
+   * @param symbol Token symbol string.
+   * @param decimals Token decimal places (0-255).
+   * @param maxSupply Maximum authorized token supply (0 for max uint128 cap).
+   * @returns Constructor execution result with initial contract and private states.
    */
   public initialState(
     context: ConstructorContext<PS>,
     initialOwner: Uint8Array,
     name: string,
     symbol: string,
-    decimals: number | bigint
+    decimals: bigint | number,
+    maxSupply: bigint
   ): ConstructorResult<PS> {
-    if (initialOwner.length !== 32) {
-      throw new Error(`Invalid initialOwner length: expected 32 bytes, got ${initialOwner.length}`);
-    }
-    const decBigInt = BigInt(decimals);
-    if (decBigInt < 0n || decBigInt > 255n) {
-      throw new Error(`Invalid decimals: must be between 0 and 255, got ${decimals}`);
-    }
-
     return this.contract.initialState(
       context,
       initialOwner,
       name,
       symbol,
-      decBigInt
+      BigInt(decimals),
+      maxSupply
     );
   }
 
   /**
-   * Retrieves the token name via circuit execution.
-   *
-   * @param context - The current circuit execution context.
-   * @returns CircuitResults containing updated context and the string token name.
+   * Executes the `name` query circuit.
    */
   public name(context: CircuitContext<PS>): CircuitResults<PS, string> {
     return this.contract.circuits.name(context);
   }
 
   /**
-   * Retrieves the token symbol via circuit execution.
-   *
-   * @param context - The current circuit execution context.
-   * @returns CircuitResults containing updated context and the string token symbol.
+   * Executes the `symbol` query circuit.
    */
   public symbol(context: CircuitContext<PS>): CircuitResults<PS, string> {
     return this.contract.circuits.symbol(context);
   }
 
   /**
-   * Retrieves the token decimals precision via circuit execution.
-   *
-   * @param context - The current circuit execution context.
-   * @returns CircuitResults containing updated context and the token decimal count.
+   * Executes the `decimals` query circuit.
    */
   public decimals(context: CircuitContext<PS>): CircuitResults<PS, bigint> {
     return this.contract.circuits.decimals(context);
   }
 
   /**
-   * Retrieves the current circulating total token supply.
-   *
-   * @param context - The current circuit execution context.
-   * @returns CircuitResults containing updated context and total supply as a bigint.
+   * Executes the `maxSupply` query circuit.
+   */
+  public maxSupply(context: CircuitContext<PS>): CircuitResults<PS, bigint> {
+    return this.contract.circuits.maxSupply(context);
+  }
+
+  /**
+   * Executes the `totalSupply` query circuit.
    */
   public totalSupply(context: CircuitContext<PS>): CircuitResults<PS, bigint> {
     return this.contract.circuits.totalSupply(context);
   }
 
   /**
-   * Queries the token balance for a specific account identity.
-   *
-   * @param context - The current circuit execution context.
-   * @param account - The 32-byte account public identifier.
-   * @returns CircuitResults containing updated context and account balance.
+   * Queries balance of an account via ZK circuit.
+   * @param context Circuit context.
+   * @param account 32-byte account address.
    */
   public balanceOf(
     context: CircuitContext<PS>,
     account: Uint8Array
   ): CircuitResults<PS, bigint> {
-    if (account.length !== 32) {
-      throw new Error(`Invalid account length: expected 32 bytes, got ${account.length}`);
-    }
     return this.contract.circuits.balanceOf(context, account);
   }
 
   /**
-   * Queries the spending allowance granted by an owner to a spender.
-   *
-   * @param context - The current circuit execution context.
-   * @param ownerAccount - The 32-byte owner account identity.
-   * @param spender - The 32-byte spender account identity.
-   * @returns CircuitResults containing updated context and remaining allowance.
+   * Queries allowance allocated by an owner to a spender.
+   * @param context Circuit context.
+   * @param ownerAccount 32-byte owner address.
+   * @param spender 32-byte spender address.
    */
   public allowance(
     context: CircuitContext<PS>,
     ownerAccount: Uint8Array,
     spender: Uint8Array
   ): CircuitResults<PS, bigint> {
-    if (ownerAccount.length !== 32) {
-      throw new Error(`Invalid ownerAccount length: expected 32 bytes, got ${ownerAccount.length}`);
-    }
-    if (spender.length !== 32) {
-      throw new Error(`Invalid spender length: expected 32 bytes, got ${spender.length}`);
-    }
     return this.contract.circuits.allowance(context, ownerAccount, spender);
   }
 
   /**
-   * Transfers tokens from the authenticated caller to a recipient.
-   *
-   * @param context - The current circuit execution context.
-   * @param caller - The 32-byte account identity of the caller.
-   * @param to - The 32-byte account identity of the recipient.
-   * @param value - The token amount to transfer.
-   * @returns CircuitResults containing updated context and boolean success indicator.
+   * Transfers tokens from caller to recipient.
+   * @param context Circuit execution context.
+   * @param caller 32-byte public address of caller.
+   * @param to 32-byte recipient address.
+   * @param value Amount to transfer.
    */
   public transfer(
     context: CircuitContext<PS>,
@@ -450,26 +461,15 @@ export class FungibleTokenV22Client<PS extends FungibleTokenV22PrivateState = Fu
     to: Uint8Array,
     value: bigint
   ): CircuitResults<PS, boolean> {
-    if (caller.length !== 32) {
-      throw new Error(`Invalid caller length: expected 32 bytes, got ${caller.length}`);
-    }
-    if (to.length !== 32) {
-      throw new Error(`Invalid to length: expected 32 bytes, got ${to.length}`);
-    }
-    if (value < 0n) {
-      throw new Error(`Transfer value must be non-negative, got ${value}`);
-    }
     return this.contract.circuits.transfer(context, caller, to, value);
   }
 
   /**
-   * Approves a spender to spend a specified amount of tokens on behalf of the caller.
-   *
-   * @param context - The current circuit execution context.
-   * @param caller - The 32-byte account identity of the approving owner.
-   * @param spender - The 32-byte account identity of the authorized spender.
-   * @param value - The maximum amount the spender is permitted to withdraw.
-   * @returns CircuitResults containing updated context and boolean success indicator.
+   * Sets token spending allowance for a designated spender.
+   * @param context Circuit execution context.
+   * @param caller 32-byte public address of caller.
+   * @param spender 32-byte spender address.
+   * @param value Amount to approve.
    */
   public approve(
     context: CircuitContext<PS>,
@@ -477,27 +477,16 @@ export class FungibleTokenV22Client<PS extends FungibleTokenV22PrivateState = Fu
     spender: Uint8Array,
     value: bigint
   ): CircuitResults<PS, boolean> {
-    if (caller.length !== 32) {
-      throw new Error(`Invalid caller length: expected 32 bytes, got ${caller.length}`);
-    }
-    if (spender.length !== 32) {
-      throw new Error(`Invalid spender length: expected 32 bytes, got ${spender.length}`);
-    }
-    if (value < 0n) {
-      throw new Error(`Approval value must be non-negative, got ${value}`);
-    }
     return this.contract.circuits.approve(context, caller, spender, value);
   }
 
   /**
-   * Transfers tokens on behalf of an owner using a pre-approved allowance.
-   *
-   * @param context - The current circuit execution context.
-   * @param caller - The 32-byte account identity of the authorized caller (spender).
-   * @param fromAccount - The 32-byte account identity of the token owner.
-   * @param to - The 32-byte recipient account identity.
-   * @param value - The token amount to transfer.
-   * @returns CircuitResults containing updated context and boolean success indicator.
+   * Transfers tokens using an approved allowance.
+   * @param context Circuit execution context.
+   * @param caller 32-byte spender caller address.
+   * @param fromAccount 32-byte owner address whose tokens are being spent.
+   * @param to 32-byte recipient address.
+   * @param value Amount to transfer.
    */
   public transferFrom(
     context: CircuitContext<PS>,
@@ -506,70 +495,40 @@ export class FungibleTokenV22Client<PS extends FungibleTokenV22PrivateState = Fu
     to: Uint8Array,
     value: bigint
   ): CircuitResults<PS, boolean> {
-    if (caller.length !== 32) {
-      throw new Error(`Invalid caller length: expected 32 bytes, got ${caller.length}`);
-    }
-    if (fromAccount.length !== 32) {
-      throw new Error(`Invalid fromAccount length: expected 32 bytes, got ${fromAccount.length}`);
-    }
-    if (to.length !== 32) {
-      throw new Error(`Invalid to length: expected 32 bytes, got ${to.length}`);
-    }
-    if (value < 0n) {
-      throw new Error(`Transfer value must be non-negative, got ${value}`);
-    }
     return this.contract.circuits.transferFrom(context, caller, fromAccount, to, value);
   }
 
   /**
-   * Mints new tokens to the target recipient. Can only be invoked by the contract owner.
-   *
-   * @param context - The current circuit execution context.
-   * @param to - The 32-byte recipient account identity.
-   * @param value - The token amount to mint.
-   * @returns CircuitResults containing updated context and boolean success indicator.
+   * Mints new tokens (callable only by contract owner).
+   * @param context Circuit execution context.
+   * @param to 32-byte recipient address.
+   * @param value Amount to mint.
    */
   public mint(
     context: CircuitContext<PS>,
     to: Uint8Array,
     value: bigint
   ): CircuitResults<PS, boolean> {
-    if (to.length !== 32) {
-      throw new Error(`Invalid to length: expected 32 bytes, got ${to.length}`);
-    }
-    if (value < 0n) {
-      throw new Error(`Mint value must be non-negative, got ${value}`);
-    }
     return this.contract.circuits.mint(context, to, value);
   }
 
   /**
-   * Burns tokens from the authenticated caller's balance, reducing the total supply.
-   *
-   * @param context - The current circuit execution context.
-   * @param caller - The 32-byte account identity of the caller burning tokens.
-   * @param value - The token amount to burn.
-   * @returns CircuitResults containing updated context and boolean success indicator.
+   * Burns tokens from caller balance.
+   * @param context Circuit execution context.
+   * @param caller 32-byte caller address.
+   * @param value Amount to burn.
    */
   public burn(
     context: CircuitContext<PS>,
     caller: Uint8Array,
     value: bigint
   ): CircuitResults<PS, boolean> {
-    if (caller.length !== 32) {
-      throw new Error(`Invalid caller length: expected 32 bytes, got ${caller.length}`);
-    }
-    if (value < 0n) {
-      throw new Error(`Burn value must be non-negative, got ${value}`);
-    }
     return this.contract.circuits.burn(context, caller, value);
   }
 
   /**
-   * Decodes and reads the typed ledger state from raw contract state bytes or query objects.
-   *
-   * @param rawState - The raw state or state value returned from the Midnight query context.
-   * @returns The decoded strongly-typed ledger state.
+   * Decodes and parses raw contract state into a typed ledger representation.
+   * @param rawState Raw StateValue, ChargedState, or query context state.
    */
   public queryLedgerStateFromRaw(
     rawState: StateValue | ChargedState | unknown

@@ -34,6 +34,9 @@ if (typeof globalThis.Reflect?.get === 'function') {
             if (target === undefined || target === null || (typeof target !== 'object' && typeof target !== 'function')) {
                 return undefined;
             }
+            if (arguments.length < 3) {
+                return originalReflectGet(target, propertyKey);
+            }
             return originalReflectGet(target, propertyKey, receiver);
         };
         (safeReflectGet as any).__isSafeWasmReflectGet = true;

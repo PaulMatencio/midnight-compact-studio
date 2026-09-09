@@ -1,7 +1,6 @@
 /**
- * Production TypeScript Client SDK for `fungible-token-v2-2` Compact Smart Contract.
- *
- * @packageDocumentation
+ * Production TypeScript Client SDK for FungibleTokenV22 (fungible-token-v2-2.compact)
+ * File: src/client/fungible-token-v2-2-sdk.ts
  */
 
 import {
@@ -23,180 +22,157 @@ import {
 } from '../../contracts/managed/fungible-token-v2-2/contract/index.js';
 
 /**
- * Ledger state structure mirroring the on-chain storage.
+ * Off-chain private state interface required for witness generation.
+ */
+export interface FungibleTokenV22PrivateState {
+  /** 32-byte secret key used to derive on-chain account address and authenticate operations */
+  readonly localSecretKey: Uint8Array;
+}
+
+/**
+ * Witness implementation mapping for FungibleTokenV22.
+ * Each witness returns a tuple of [updatedPrivateState, witnessOutput].
+ */
+export type FungibleTokenV22Witnesses<PS extends FungibleTokenV22PrivateState> = {
+  localSecretKey: (context: WitnessContext<ContractLedger, PS>) => [PS, Uint8Array];
+};
+
+/**
+ * Strongly typed representation of the on-chain ledger state.
  */
 export type FungibleTokenV22LedgerState = ContractLedger;
 
 /**
- * Base private state interface for the Fungible Token client.
+ * Factory for creating default witness implementations.
  */
-export interface FungibleTokenV22PrivateState {
-  /** 32-byte caller private secret key used for account authentication */
-  readonly secretKey: Uint8Array;
-  /** Optional extensible properties */
-  readonly [key: string]: unknown;
+export function createDefaultWitnesses<
+  PS extends FungibleTokenV22PrivateState
+>(): FungibleTokenV22Witnesses<PS> {
+  return {
+    localSecretKey: (context: WitnessContext<ContractLedger, PS>): [PS, Uint8Array] => {
+      if (!context.privateState || !context.privateState.localSecretKey) {
+        throw new Error('FungibleTokenV22Witnesses: localSecretKey missing in privateState');
+      }
+      return [context.privateState, context.privateState.localSecretKey];
+    },
+  };
 }
 
 /**
- * Strongly typed witness declarations for `fungible-token-v2-2`.
- *
- * Each witness receives a `WitnessContext` and must return a tuple `[PS, T]`.
- */
-export interface FungibleTokenV22Witnesses<PS extends FungibleTokenV22PrivateState = FungibleTokenV22PrivateState> {
-  /**
-   * Retrieves the caller's private 32-byte secret key for ZK authentication.
-   *
-   * @param context - The execution witness context containing private state and query context.
-   * @returns A tuple containing `[updatedPrivateState, secretKeyBytes]`.
-   */
-  readonly localSecretKey: (
-    context: WitnessContext<ContractLedger, PS>
-  ) => [PS, Uint8Array];
-}
-
-/**
- * Production-grade Client SDK for interacting with the `fungible-token-v2-2` smart contract.
+ * Production-grade client SDK for interacting with the FungibleTokenV22 smart contract.
  */
 export class FungibleTokenV22Client<PS extends FungibleTokenV22PrivateState = FungibleTokenV22PrivateState> {
-  private readonly contract: ManagedContract<PS>;
+  protected readonly contract: ManagedContract<PS>;
 
   /**
-   * Constructs an instance of the `FungibleTokenV22Client`.
-   *
-   * @param witnesses - The witness implementation object.
+   * Initializes the FungibleTokenV22 client with witness providers.
+   * @param witnesses Optional custom witness implementations.
    */
-  constructor(witnesses: FungibleTokenV22Witnesses<PS>) {
-    // Map to the generated compiler contract witnesses interface
-    const contractWitnesses: ContractWitnesses<PS> = {
+  constructor(witnesses: FungibleTokenV22Witnesses<PS> = createDefaultWitnesses<PS>()) {
+    const witnessAdapter: ContractWitnesses<PS> = {
       localSecretKey: (context: WitnessContext<ContractLedger, PS>): [PS, Uint8Array] => {
         return witnesses.localSecretKey(context);
       },
     };
-
-    this.contract = new ManagedContract<PS>(contractWitnesses);
+    this.contract = new ManagedContract<PS>(witnessAdapter);
   }
 
   /**
-   * Initializes the contract state with constructor arguments.
+   * Evaluates the contract constructor to produce initial ledger and private states.
    *
-   * @param context - The constructor initialization context.
-   * @param initialOwner - The 32-byte address of the contract administrator/owner.
-   * @param name - The descriptive token name.
-   * @param symbol - The token symbol / ticker.
-   * @param decimals - The decimal precision (0 - 255).
-   * @returns The constructor execution result containing initial ledger and private states.
+   * @param context Runtime constructor context containing deployer private state.
+   * @param initialOwner 32-byte public identifier of the contract owner.
+   * @param name Token name string.
+   * @param symbol Token symbol string.
+   * @param decimals Token decimal places (0-255).
+   * @param maxSupply Maximum authorized token supply (0 for max uint128 cap).
+   * @returns Constructor execution result with initial contract and private states.
    */
   public initialState(
     context: ConstructorContext<PS>,
     initialOwner: Uint8Array,
     name: string,
     symbol: string,
-    decimals: number | bigint
+    decimals: bigint | number,
+    maxSupply: bigint
   ): ConstructorResult<PS> {
-    if (initialOwner.length !== 32) {
-      throw new Error(`Invalid initialOwner length: expected 32 bytes, got ${initialOwner.length}`);
-    }
-    const decBigInt = BigInt(decimals);
-    if (decBigInt < 0n || decBigInt > 255n) {
-      throw new Error(`Invalid decimals: must be between 0 and 255, got ${decimals}`);
-    }
-
     return this.contract.initialState(
       context,
       initialOwner,
       name,
       symbol,
-      decBigInt
+      BigInt(decimals),
+      maxSupply
     );
   }
 
   /**
-   * Retrieves the token name via circuit execution.
-   *
-   * @param context - The current circuit execution context.
-   * @returns CircuitResults containing updated context and the string token name.
+   * Executes the `name` query circuit.
    */
   public name(context: CircuitContext<PS>): CircuitResults<PS, string> {
     return this.contract.circuits.name(context);
   }
 
   /**
-   * Retrieves the token symbol via circuit execution.
-   *
-   * @param context - The current circuit execution context.
-   * @returns CircuitResults containing updated context and the string token symbol.
+   * Executes the `symbol` query circuit.
    */
   public symbol(context: CircuitContext<PS>): CircuitResults<PS, string> {
     return this.contract.circuits.symbol(context);
   }
 
   /**
-   * Retrieves the token decimals precision via circuit execution.
-   *
-   * @param context - The current circuit execution context.
-   * @returns CircuitResults containing updated context and the token decimal count.
+   * Executes the `decimals` query circuit.
    */
   public decimals(context: CircuitContext<PS>): CircuitResults<PS, bigint> {
     return this.contract.circuits.decimals(context);
   }
 
   /**
-   * Retrieves the current circulating total token supply.
-   *
-   * @param context - The current circuit execution context.
-   * @returns CircuitResults containing updated context and total supply as a bigint.
+   * Executes the `maxSupply` query circuit.
+   */
+  public maxSupply(context: CircuitContext<PS>): CircuitResults<PS, bigint> {
+    return this.contract.circuits.maxSupply(context);
+  }
+
+  /**
+   * Executes the `totalSupply` query circuit.
    */
   public totalSupply(context: CircuitContext<PS>): CircuitResults<PS, bigint> {
     return this.contract.circuits.totalSupply(context);
   }
 
   /**
-   * Queries the token balance for a specific account identity.
-   *
-   * @param context - The current circuit execution context.
-   * @param account - The 32-byte account public identifier.
-   * @returns CircuitResults containing updated context and account balance.
+   * Queries balance of an account via ZK circuit.
+   * @param context Circuit context.
+   * @param account 32-byte account address.
    */
   public balanceOf(
     context: CircuitContext<PS>,
     account: Uint8Array
   ): CircuitResults<PS, bigint> {
-    if (account.length !== 32) {
-      throw new Error(`Invalid account length: expected 32 bytes, got ${account.length}`);
-    }
     return this.contract.circuits.balanceOf(context, account);
   }
 
   /**
-   * Queries the spending allowance granted by an owner to a spender.
-   *
-   * @param context - The current circuit execution context.
-   * @param ownerAccount - The 32-byte owner account identity.
-   * @param spender - The 32-byte spender account identity.
-   * @returns CircuitResults containing updated context and remaining allowance.
+   * Queries allowance allocated by an owner to a spender.
+   * @param context Circuit context.
+   * @param ownerAccount 32-byte owner address.
+   * @param spender 32-byte spender address.
    */
   public allowance(
     context: CircuitContext<PS>,
     ownerAccount: Uint8Array,
     spender: Uint8Array
   ): CircuitResults<PS, bigint> {
-    if (ownerAccount.length !== 32) {
-      throw new Error(`Invalid ownerAccount length: expected 32 bytes, got ${ownerAccount.length}`);
-    }
-    if (spender.length !== 32) {
-      throw new Error(`Invalid spender length: expected 32 bytes, got ${spender.length}`);
-    }
     return this.contract.circuits.allowance(context, ownerAccount, spender);
   }
 
   /**
-   * Transfers tokens from the authenticated caller to a recipient.
-   *
-   * @param context - The current circuit execution context.
-   * @param caller - The 32-byte account identity of the caller.
-   * @param to - The 32-byte account identity of the recipient.
-   * @param value - The token amount to transfer.
-   * @returns CircuitResults containing updated context and boolean success indicator.
+   * Transfers tokens from caller to recipient.
+   * @param context Circuit execution context.
+   * @param caller 32-byte public address of caller.
+   * @param to 32-byte recipient address.
+   * @param value Amount to transfer.
    */
   public transfer(
     context: CircuitContext<PS>,
@@ -204,26 +180,15 @@ export class FungibleTokenV22Client<PS extends FungibleTokenV22PrivateState = Fu
     to: Uint8Array,
     value: bigint
   ): CircuitResults<PS, boolean> {
-    if (caller.length !== 32) {
-      throw new Error(`Invalid caller length: expected 32 bytes, got ${caller.length}`);
-    }
-    if (to.length !== 32) {
-      throw new Error(`Invalid to length: expected 32 bytes, got ${to.length}`);
-    }
-    if (value < 0n) {
-      throw new Error(`Transfer value must be non-negative, got ${value}`);
-    }
     return this.contract.circuits.transfer(context, caller, to, value);
   }
 
   /**
-   * Approves a spender to spend a specified amount of tokens on behalf of the caller.
-   *
-   * @param context - The current circuit execution context.
-   * @param caller - The 32-byte account identity of the approving owner.
-   * @param spender - The 32-byte account identity of the authorized spender.
-   * @param value - The maximum amount the spender is permitted to withdraw.
-   * @returns CircuitResults containing updated context and boolean success indicator.
+   * Sets token spending allowance for a designated spender.
+   * @param context Circuit execution context.
+   * @param caller 32-byte public address of caller.
+   * @param spender 32-byte spender address.
+   * @param value Amount to approve.
    */
   public approve(
     context: CircuitContext<PS>,
@@ -231,27 +196,16 @@ export class FungibleTokenV22Client<PS extends FungibleTokenV22PrivateState = Fu
     spender: Uint8Array,
     value: bigint
   ): CircuitResults<PS, boolean> {
-    if (caller.length !== 32) {
-      throw new Error(`Invalid caller length: expected 32 bytes, got ${caller.length}`);
-    }
-    if (spender.length !== 32) {
-      throw new Error(`Invalid spender length: expected 32 bytes, got ${spender.length}`);
-    }
-    if (value < 0n) {
-      throw new Error(`Approval value must be non-negative, got ${value}`);
-    }
     return this.contract.circuits.approve(context, caller, spender, value);
   }
 
   /**
-   * Transfers tokens on behalf of an owner using a pre-approved allowance.
-   *
-   * @param context - The current circuit execution context.
-   * @param caller - The 32-byte account identity of the authorized caller (spender).
-   * @param fromAccount - The 32-byte account identity of the token owner.
-   * @param to - The 32-byte recipient account identity.
-   * @param value - The token amount to transfer.
-   * @returns CircuitResults containing updated context and boolean success indicator.
+   * Transfers tokens using an approved allowance.
+   * @param context Circuit execution context.
+   * @param caller 32-byte spender caller address.
+   * @param fromAccount 32-byte owner address whose tokens are being spent.
+   * @param to 32-byte recipient address.
+   * @param value Amount to transfer.
    */
   public transferFrom(
     context: CircuitContext<PS>,
@@ -260,70 +214,40 @@ export class FungibleTokenV22Client<PS extends FungibleTokenV22PrivateState = Fu
     to: Uint8Array,
     value: bigint
   ): CircuitResults<PS, boolean> {
-    if (caller.length !== 32) {
-      throw new Error(`Invalid caller length: expected 32 bytes, got ${caller.length}`);
-    }
-    if (fromAccount.length !== 32) {
-      throw new Error(`Invalid fromAccount length: expected 32 bytes, got ${fromAccount.length}`);
-    }
-    if (to.length !== 32) {
-      throw new Error(`Invalid to length: expected 32 bytes, got ${to.length}`);
-    }
-    if (value < 0n) {
-      throw new Error(`Transfer value must be non-negative, got ${value}`);
-    }
     return this.contract.circuits.transferFrom(context, caller, fromAccount, to, value);
   }
 
   /**
-   * Mints new tokens to the target recipient. Can only be invoked by the contract owner.
-   *
-   * @param context - The current circuit execution context.
-   * @param to - The 32-byte recipient account identity.
-   * @param value - The token amount to mint.
-   * @returns CircuitResults containing updated context and boolean success indicator.
+   * Mints new tokens (callable only by contract owner).
+   * @param context Circuit execution context.
+   * @param to 32-byte recipient address.
+   * @param value Amount to mint.
    */
   public mint(
     context: CircuitContext<PS>,
     to: Uint8Array,
     value: bigint
   ): CircuitResults<PS, boolean> {
-    if (to.length !== 32) {
-      throw new Error(`Invalid to length: expected 32 bytes, got ${to.length}`);
-    }
-    if (value < 0n) {
-      throw new Error(`Mint value must be non-negative, got ${value}`);
-    }
     return this.contract.circuits.mint(context, to, value);
   }
 
   /**
-   * Burns tokens from the authenticated caller's balance, reducing the total supply.
-   *
-   * @param context - The current circuit execution context.
-   * @param caller - The 32-byte account identity of the caller burning tokens.
-   * @param value - The token amount to burn.
-   * @returns CircuitResults containing updated context and boolean success indicator.
+   * Burns tokens from caller balance.
+   * @param context Circuit execution context.
+   * @param caller 32-byte caller address.
+   * @param value Amount to burn.
    */
   public burn(
     context: CircuitContext<PS>,
     caller: Uint8Array,
     value: bigint
   ): CircuitResults<PS, boolean> {
-    if (caller.length !== 32) {
-      throw new Error(`Invalid caller length: expected 32 bytes, got ${caller.length}`);
-    }
-    if (value < 0n) {
-      throw new Error(`Burn value must be non-negative, got ${value}`);
-    }
     return this.contract.circuits.burn(context, caller, value);
   }
 
   /**
-   * Decodes and reads the typed ledger state from raw contract state bytes or query objects.
-   *
-   * @param rawState - The raw state or state value returned from the Midnight query context.
-   * @returns The decoded strongly-typed ledger state.
+   * Decodes and parses raw contract state into a typed ledger representation.
+   * @param rawState Raw StateValue, ChargedState, or query context state.
    */
   public queryLedgerStateFromRaw(
     rawState: StateValue | ChargedState | unknown

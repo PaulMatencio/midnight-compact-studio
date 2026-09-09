@@ -8,6 +8,7 @@ export type ImpureCircuits<PS> = {
   name(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
   symbol(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
   decimals(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
+  maxSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
   totalSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
   balanceOf(context: __compactRuntime.CircuitContext<PS>, account_0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
   allowance(context: __compactRuntime.CircuitContext<PS>,
@@ -38,6 +39,7 @@ export type ProvableCircuits<PS> = {
   name(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
   symbol(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
   decimals(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
+  maxSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
   totalSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
   balanceOf(context: __compactRuntime.CircuitContext<PS>, account_0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
   allowance(context: __compactRuntime.CircuitContext<PS>,
@@ -71,6 +73,7 @@ export type Circuits<PS> = {
   name(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
   symbol(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
   decimals(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
+  maxSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
   totalSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
   balanceOf(context: __compactRuntime.CircuitContext<PS>, account_0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
   allowance(context: __compactRuntime.CircuitContext<PS>,
@@ -113,6 +116,7 @@ export type Ledger = {
     [Symbol.iterator](): Iterator<[[Uint8Array, Uint8Array], bigint]>
   };
   readonly _totalSupply: bigint;
+  readonly _maxSupply: bigint;
   readonly _name: string;
   readonly _symbol: string;
   readonly _decimals: bigint;
@@ -133,7 +137,8 @@ export declare class Contract<PS = any, W extends Witnesses<PS> = Witnesses<PS>>
                initialOwner_0: Uint8Array,
                name__0: string,
                symbol__0: string,
-               decimals__0: bigint): __compactRuntime.ConstructorResult<PS>;
+               decimals__0: bigint,
+               maxSupply__0: bigint): __compactRuntime.ConstructorResult<PS>;
 }
 
 export declare function ledger(state: __compactRuntime.StateValue | __compactRuntime.ChargedState): Ledger;

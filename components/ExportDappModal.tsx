@@ -26,12 +26,14 @@ interface ExportDappModalProps {
     isOpen: boolean;
     onClose: () => void;
     contractFilename: string;
+    contractAddress?: string;
 }
 
 export function ExportDappModal({
     isOpen,
     onClose,
     contractFilename,
+    contractAddress: initialContractAddress,
 }: ExportDappModalProps) {
     const toast = useToast();
     const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -43,9 +45,9 @@ export function ExportDappModal({
 
     const cleanContractName = getCleanContractBaseName(contractFilename);
 
-    // Deployment config state loaded from midnight.config.ts defaults
+    // Deployment config state loaded from midnight.config.ts defaults and current contract
     const [contractAddress, setContractAddress] = useState<string>(
-        '0000000000000000000000000000000000000000000000000000000000000000'
+        initialContractAddress || '0000000000000000000000000000000000000000000000000000000000000000'
     );
     const [networkId, setNetworkId] = useState<string>(MIDNIGHT_CONFIG.networkId);
     const [indexerUrl, setIndexerUrl] = useState<string>(MIDNIGHT_CONFIG.indexer);
@@ -53,6 +55,43 @@ export function ExportDappModal({
     const [nodeUrl, setNodeUrl] = useState<string>(MIDNIGHT_CONFIG.nodeRpc);
     const [faucetUrl, setFaucetUrl] = useState<string>(MIDNIGHT_CONFIG.faucet);
     const [explorerUrl, setExplorerUrl] = useState<string>(MIDNIGHT_CONFIG.explorer);
+
+    // Auto-detect and populate current deployed contract address
+    useEffect(() => {
+        if (!isOpen) return;
+
+        if (initialContractAddress && initialContractAddress !== '0000000000000000000000000000000000000000000000000000000000000000') {
+            setContractAddress(initialContractAddress);
+            return;
+        }
+
+        const fetchCurrentContractAddress = async () => {
+            try {
+                const res = await fetch('/api/contracts');
+                const data = await res.json();
+                if (data?.success && data?.data?.deployments?.length > 0) {
+                    const list: any[] = data.data.deployments;
+                    const exactMatch = list.find((d) => (d.contractType || '').toLowerCase() === cleanName);
+                    const matched =
+                        exactMatch ||
+                        list.find((d) => {
+                            const type = (d.contractType || '').toLowerCase();
+                            const nick = (d.nickname || '').toLowerCase();
+                            return type === cleanName || nick.includes(cleanName) || cleanName.includes(type);
+                        }) ||
+                        list[0];
+
+                    if (matched?.contractAddress) {
+                        setContractAddress(matched.contractAddress);
+                    }
+                }
+            } catch (err) {
+                console.warn('Could not auto-fetch current contract address for export:', err);
+            }
+        };
+
+        fetchCurrentContractAddress();
+    }, [isOpen, cleanContractName, initialContractAddress]);
 
     // Fetch bundle preview data
     const loadPreview = async () => {
@@ -75,6 +114,12 @@ export function ExportDappModal({
             if (data.success) {
                 setDetectedFiles(data.detectedFiles || []);
                 setMasterPrompt(data.masterPrompt || '');
+                if (
+                    data.deploymentConfig?.contractAddress &&
+                    (!contractAddress || contractAddress === '0000000000000000000000000000000000000000000000000000000000000000')
+                ) {
+                    setContractAddress(data.deploymentConfig.contractAddress);
+                }
             } else {
                 throw new Error(data.error || 'Failed to inspect artifacts');
             }
@@ -122,7 +167,7 @@ export function ExportDappModal({
         if (isOpen) {
             loadPreview();
         }
-    }, [isOpen, cleanContractName]);
+    }, [isOpen, cleanContractName, contractAddress]);
 
     if (!isOpen) return null;
 
@@ -447,9 +492,19 @@ export function ExportDappModal({
                             <div className="space-y-3">
                                 <div>
                                     <div className="flex items-center justify-between mb-1">
-                                        <label className="text-xs font-medium text-slate-300">
-                                            Deployed Contract Address (Hex)
-                                        </label>
+                                        <div className="flex items-center space-x-2">
+                                            <label className="text-xs font-medium text-slate-300">
+                                                Deployed Contract Address (Hex)
+                                            </label>
+                                            {contractAddress &&
+                                                contractAddress !==
+                                                    '0000000000000000000000000000000000000000000000000000000000000000' && (
+                                                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                                        <CheckCircle2 className="h-2.5 w-2.5" />
+                                                        <span>Active Contract</span>
+                                                    </span>
+                                                )}
+                                        </div>
                                         <button
                                             onClick={generateRandomAddress}
                                             className="text-[11px] text-indigo-400 hover:text-indigo-300 underline cursor-pointer"

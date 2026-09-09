@@ -37,6 +37,17 @@
       }
     },
     {
+      "name": "maxSupply",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 340282366920938463463374607431768211455
+      }
+    },
+    {
       "name": "totalSupply",
       "pure": false,
       "proof": true,
@@ -301,17 +312,17 @@
       }
     },
     {
-      "name": "_name",
+      "name": "_maxSupply",
       "index": 3,
       "exported": true,
       "storage": "Cell",
       "type": {
-        "type-name": "Opaque",
-        "tsType": "string"
+        "type-name": "Uint",
+        "maxval": 340282366920938463463374607431768211455
       }
     },
     {
-      "name": "_symbol",
+      "name": "_name",
       "index": 4,
       "exported": true,
       "storage": "Cell",
@@ -321,8 +332,18 @@
       }
     },
     {
-      "name": "_decimals",
+      "name": "_symbol",
       "index": 5,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Opaque",
+        "tsType": "string"
+      }
+    },
+    {
+      "name": "_decimals",
+      "index": 6,
       "exported": true,
       "storage": "Cell",
       "type": {
@@ -332,7 +353,7 @@
     },
     {
       "name": "owner",
-      "index": 6,
+      "index": 7,
       "exported": true,
       "storage": "Cell",
       "type": {

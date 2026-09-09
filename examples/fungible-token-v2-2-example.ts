@@ -13,80 +13,105 @@ import {
 import {
   FungibleTokenV22Client,
   type FungibleTokenV22PrivateState,
-  type FungibleTokenV22Witnesses,
+  createDefaultWitnesses,
 } from '../src/client/fungible-token-v2-2-sdk.js';
 
-// Setup Mock Addresses and Keys (32-byte hex strings)
-const coinPublicKey = '01'.repeat(32);
-const contractAddress = '00'.repeat(32);
-
-// Mock private state holding caller secret keys
-const ownerSecretKey = new Uint8Array(32).fill(0xaa);
-const aliceSecretKey = new Uint8Array(32).fill(0xbb);
-
-let privateState: FungibleTokenV22PrivateState = {
-  secretKey: ownerSecretKey,
-};
-
-// Implement witnesses
-const witnesses: FungibleTokenV22Witnesses<FungibleTokenV22PrivateState> = {
-  localSecretKey: ({ privateState }) => [privateState, privateState.secretKey],
-};
-
 async function main() {
-  console.log('--- Initializing FungibleTokenV22 Contract ---');
-  const client = new FungibleTokenV22Client(witnesses);
+  console.log('=== FungibleTokenV22 Client SDK Walkthrough ===\n');
 
-  // 1. Initialize Contract State
-  const initialOwnerAddress = new Uint8Array(32).fill(0x11);
+  // 1. Setup mock keys and 32-byte addresses
+  const coinPublicKey = '01'.repeat(32);
+  const contractAddress = '00'.repeat(32);
+
+  const ownerSecretKey = new Uint8Array(32).fill(0xaa);
+  const userSecretKey = new Uint8Array(32).fill(0xbb);
+
+  // In production, derive public identity using persistentHash([pad(32, "fungible-token:auth"), contractAddress, sk])
+  // For simulation, we assign deterministic 32-byte account representations:
+  const ownerAddress = new Uint8Array(32).fill(0x11);
+  const userAddress = new Uint8Array(32).fill(0x22);
+
+  // 2. Initialize private state and SDK Client
+  let ownerPrivateState: FungibleTokenV22PrivateState = {
+    localSecretKey: ownerSecretKey,
+  };
+
+  let userPrivateState: FungibleTokenV22PrivateState = {
+    localSecretKey: userSecretKey,
+  };
+
+  const client = new FungibleTokenV22Client(createDefaultWitnesses());
+
+  // 3. Initialize Contract (Constructor)
+  console.log('1. Deploying contract...');
   const constructorCtx: ConstructorContext<FungibleTokenV22PrivateState> =
-    CompactRuntime.createConstructorContext(privateState, coinPublicKey);
+    CompactRuntime.createConstructorContext(ownerPrivateState, coinPublicKey);
 
   const initResult = client.initialState(
     constructorCtx,
-    initialOwnerAddress,
-    'Midnight USD',
-    'MUSD',
-    18n
+    ownerAddress,
+    'Midnight Shield Token',
+    'MST',
+    18n,
+    1_000_000_000n * 10n ** 18n // 1 Billion cap
   );
 
-  privateState = initResult.currentPrivateState;
   let currentChargedState = initResult.currentContractState.data;
+  ownerPrivateState = initResult.currentPrivateState;
 
-  console.log('Contract successfully initialized.');
   let ledgerState = client.queryLedgerStateFromRaw(currentChargedState);
-  console.log(`Token Name: ${ledgerState._name}`);
-  console.log(`Token Symbol: ${ledgerState._symbol}`);
-  console.log(`Decimals: ${ledgerState._decimals}`);
-  console.log(`Initial Total Supply: ${ledgerState._totalSupply}`);
+  console.log('   Token Name    :', ledgerState._name);
+  console.log('   Token Symbol  :', ledgerState._symbol);
+  console.log('   Total Supply  :', ledgerState._totalSupply.toString());
 
-  // 2. Query Metadata Circuit
+  // 4. Mint Tokens as Owner
+  console.log('\n2. Minting 1,000 MST to User...');
   let circuitCtx: CircuitContext<FungibleTokenV22PrivateState> =
     CompactRuntime.createCircuitContext(
       contractAddress,
       coinPublicKey,
       currentChargedState,
-      privateState
+      ownerPrivateState
     );
 
-  const nameResult = client.name(circuitCtx);
-  currentChargedState = nameResult.context.currentQueryContext.state;
-  console.log(`Queried name() circuit: ${nameResult.result}`);
+  const mintAmount = 1000n * 10n ** 18n;
+  const mintResult = client.mint(circuitCtx, userAddress, mintAmount);
 
-  // 3. Query Balance
+  currentChargedState = mintResult.context.currentQueryContext.state;
+  ownerPrivateState = mintResult.context.currentPrivateState;
+
+  ledgerState = client.queryLedgerStateFromRaw(currentChargedState);
+  console.log('   Total Supply After Mint:', ledgerState._totalSupply.toString());
+
+  // 5. Transfer Tokens (User -> Owner)
+  console.log('\n3. User transferring 250 MST back to Owner...');
   circuitCtx = CompactRuntime.createCircuitContext(
     contractAddress,
     coinPublicKey,
     currentChargedState,
-    privateState
+    userPrivateState
   );
-  const aliceAddress = new Uint8Array(32).fill(0x22);
-  const balResult = client.balanceOf(circuitCtx, aliceAddress);
-  currentChargedState = balResult.context.currentQueryContext.state;
-  console.log(`Alice Balance: ${balResult.result}`);
+
+  const transferAmount = 250n * 10n ** 18n;
+  const transferResult = client.transfer(circuitCtx, userAddress, ownerAddress, transferAmount);
+
+  currentChargedState = transferResult.context.currentQueryContext.state;
+  userPrivateState = transferResult.context.currentPrivateState;
+
+  // 6. Inspect Balances
+  circuitCtx = CompactRuntime.createCircuitContext(
+    contractAddress,
+    coinPublicKey,
+    currentChargedState,
+    userPrivateState
+  );
+
+  const userBalResult = client.balanceOf(circuitCtx, userAddress);
+  const ownerBalResult = client.balanceOf(userBalResult.context, ownerAddress);
+
+  console.log('   User Balance :', userBalResult.result.toString());
+  console.log('   Owner Balance:', ownerBalResult.result.toString());
+  console.log('\n=== Walkthrough completed successfully ===');
 }
 
-main().catch((err) => {
-  console.error('Execution failed:', err);
-  process.exit(1);
-});
+main().catch(console.error);

@@ -68,6 +68,8 @@ describe('Export DApp Bundle API (/api/workspace/export-dapp)', () => {
         expect(configText).toBeDefined();
 
         const parsedConfig = JSON.parse(configText!);
+        expect(parsedConfig.contractAddress).toBe('6764022acd5b9fbff2b5baeb84f3082cf51f6d8b2dc978df9778b93c0005983c');
+        expect(parsedConfig.contractAddress).not.toBe('0000000000000000000000000000000000000000000000000000000000000000');
         expect(parsedConfig.networkId).toBe('preprod');
         expect(parsedConfig.indexerUrl).toBe('https://indexer.preprod.midnight.network/api/v4/graphql');
         expect(parsedConfig.indexerWsUrl).toBe('wss://indexer.preprod.midnight.network/api/v4/graphql/ws');
@@ -76,6 +78,12 @@ describe('Export DApp Bundle API (/api/workspace/export-dapp)', () => {
         expect(parsedConfig.faucetUrl).toBe('https://faucet.preprod.midnight.network');
         expect(parsedConfig.indexer).toBe('https://indexer.preprod.midnight.network/api/v4/graphql');
         expect(parsedConfig.nodeRpc).toBe('https://rpc.preprod.midnight.network');
+
+        // Verify deployment.json is also packaged with the current contract address
+        const deploymentJsonText = await zip.file('deployment.json')?.async('text');
+        expect(deploymentJsonText).toBeDefined();
+        const parsedDeploymentJson = JSON.parse(deploymentJsonText!);
+        expect(parsedDeploymentJson.contractAddress).toBe('6764022acd5b9fbff2b5baeb84f3082cf51f6d8b2dc978df9778b93c0005983c');
     });
 
     it('generates a valid ZIP archive via POST with custom deployment configuration', async () => {

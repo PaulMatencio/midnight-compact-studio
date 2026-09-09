@@ -15,9 +15,11 @@ import {
     Search,
     Trash2,
     Sparkles,
-    CheckCircle2
+    CheckCircle2,
+    Info
 } from 'lucide-react';
 import { Breadcrumbs } from '@/components/Breadcrumbs';
+import { ContractDetailsModal } from '@/components/ContractDetailsModal';
 import { useToast } from '@/src/presentation/context/ToastContext';
 import type { DeployedContractRecord } from '@/src/domain/entities/contract-registry.entity';
 
@@ -30,6 +32,9 @@ export default function ContractsPage() {
     const [searchQuery, setSearchQuery] = useState<string>('');
     const [copied, setCopied] = useState<string | null>(null);
     const toast = useToast();
+
+    // Details Modal State (Triggered on Card Double Click)
+    const [selectedContractForDetails, setSelectedContractForDetails] = useState<DeployedContractRecord | null>(null);
 
     // Import Modal State
     const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
@@ -197,6 +202,14 @@ export default function ContractsPage() {
                 </div>
             </div>
 
+            {/* User Interaction Tip Banner */}
+            <div className="flex items-center space-x-2.5 text-xs text-indigo-300/90 bg-indigo-950/30 border border-indigo-500/20 px-4 py-2.5 rounded-xl">
+                <Info className="h-4 w-4 text-indigo-400 shrink-0" />
+                <span>
+                    <strong className="text-white">Double-click</strong> on any contract card to inspect its full details, public on-chain ledger state, owner, and parameters in a modal.
+                </span>
+            </div>
+
             {/* Contract Cards Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {isLoading ? (
@@ -210,16 +223,18 @@ export default function ContractsPage() {
                         return (
                             <div
                                 key={contract.contractAddress}
-                                className="rounded-2xl border border-indigo-500/20 bg-midnight-900/70 backdrop-blur-xl p-6 shadow-xl space-y-4 hover:border-indigo-500/50 transition-all flex flex-col justify-between"
+                                onDoubleClick={() => setSelectedContractForDetails(contract)}
+                                title="Double-click to inspect contract details and live public state"
+                                className="rounded-2xl border border-indigo-500/20 bg-midnight-900/70 backdrop-blur-xl p-6 shadow-xl space-y-4 hover:border-indigo-500/50 hover:shadow-indigo-500/10 transition-all flex flex-col justify-between cursor-pointer group select-none"
                             >
                                 <div className="space-y-3">
                                     <div className="flex items-center justify-between">
                                         <div className="flex items-center space-x-3">
-                                            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                                            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 group-hover:scale-105 transition-transform">
                                                 <FileCode2 className="h-5 w-5" />
                                             </div>
                                             <div>
-                                                <h3 className="text-base font-bold text-white">
+                                                <h3 className="text-base font-bold text-white group-hover:text-indigo-300 transition-colors">
                                                     {contract.nickname || 'Hello World'}
                                                 </h3>
                                                 <span className="text-[11px] font-medium text-indigo-400 uppercase tracking-wider">
@@ -227,13 +242,28 @@ export default function ContractsPage() {
                                                 </span>
                                             </div>
                                         </div>
-                                        <button
-                                            onClick={() => handleDeleteContract(contract.contractAddress)}
-                                            title="Untrack contract"
-                                            className="text-slate-500 hover:text-rose-400 transition-colors p-1"
-                                        >
-                                            <Trash2 className="h-4 w-4" />
-                                        </button>
+                                        <div className="flex items-center space-x-1">
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setSelectedContractForDetails(contract);
+                                                }}
+                                                title="View contract details & public state"
+                                                className="text-slate-400 hover:text-indigo-300 hover:bg-white/5 transition-colors p-1.5 rounded-lg"
+                                            >
+                                                <Info className="h-4 w-4" />
+                                            </button>
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleDeleteContract(contract.contractAddress);
+                                                }}
+                                                title="Untrack contract"
+                                                className="text-slate-500 hover:text-rose-400 hover:bg-white/5 transition-colors p-1.5 rounded-lg"
+                                            >
+                                                <Trash2 className="h-4 w-4" />
+                                            </button>
+                                        </div>
                                     </div>
 
                                     <div className="space-y-3 text-xs">
@@ -244,6 +274,7 @@ export default function ContractsPage() {
                                                     href={`${EXPLORER_BASE}/contract/${encodeURIComponent(contract.contractAddress)}`}
                                                     target="_blank"
                                                     rel="noopener noreferrer"
+                                                    onClick={(e) => e.stopPropagation()}
                                                     className="text-[11px] text-indigo-400 hover:text-indigo-300 flex items-center space-x-1 transition-colors"
                                                     title="View in Midnight Explorer"
                                                 >
@@ -256,6 +287,7 @@ export default function ContractsPage() {
                                                     href={`${EXPLORER_BASE}/contract/${encodeURIComponent(contract.contractAddress)}`}
                                                     target="_blank"
                                                     rel="noopener noreferrer"
+                                                    onClick={(e) => e.stopPropagation()}
                                                     className="truncate mr-2 hover:underline hover:text-cyan-200 transition-colors"
                                                     title="View in Midnight Explorer"
                                                 >
@@ -263,7 +295,10 @@ export default function ContractsPage() {
                                                 </a>
                                                 <div className="flex items-center space-x-1.5 shrink-0">
                                                     <button
-                                                        onClick={() => copyToClipboard(contract.contractAddress, contract.contractAddress)}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            copyToClipboard(contract.contractAddress, contract.contractAddress);
+                                                        }}
                                                         className="text-slate-400 hover:text-white transition-colors"
                                                         title="Copy contract address"
                                                     >
@@ -277,6 +312,7 @@ export default function ContractsPage() {
                                                         href={`${EXPLORER_BASE}/contract/${encodeURIComponent(contract.contractAddress)}`}
                                                         target="_blank"
                                                         rel="noopener noreferrer"
+                                                        onClick={(e) => e.stopPropagation()}
                                                         className="text-slate-400 hover:text-indigo-300 transition-colors p-0.5"
                                                         title="Open in Midnight Explorer"
                                                     >
@@ -313,7 +349,10 @@ export default function ContractsPage() {
                                                         {ownerAddress}
                                                     </span>
                                                     <button
-                                                        onClick={() => copyToClipboard(ownerAddress, `owner-${contract.contractAddress}`)}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            copyToClipboard(ownerAddress, `owner-${contract.contractAddress}`);
+                                                        }}
                                                         className="text-slate-400 hover:text-white transition-colors shrink-0 p-0.5"
                                                         title="Copy owner address"
                                                     >
@@ -340,9 +379,10 @@ export default function ContractsPage() {
                                     </div>
                                 </div>
 
-                                <div className="pt-3 border-t border-white/5">
+                                <div className="pt-3 border-t border-white/5 flex items-center space-x-2">
                                     <Link
                                         href={`/contracts/${encodeURIComponent(contract.contractAddress)}`}
+                                        onClick={(e) => e.stopPropagation()}
                                         className="w-full inline-flex items-center justify-center space-x-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 px-4 py-2.5 text-xs font-bold text-white shadow-md hover:scale-[1.01] transition-transform"
                                     >
                                         <Play className="h-3.5 w-3.5 fill-current" />
@@ -380,6 +420,18 @@ export default function ContractsPage() {
                     </div>
                 )}
             </div>
+
+            {/* Contract Details Modal (Triggered on Card Double Click or Info Click) */}
+            <ContractDetailsModal
+                isOpen={!!selectedContractForDetails}
+                onClose={() => setSelectedContractForDetails(null)}
+                contract={selectedContractForDetails}
+                liveOwner={
+                    selectedContractForDetails
+                        ? liveOwners[selectedContractForDetails.contractAddress]
+                        : undefined
+                }
+            />
 
             {/* Import Contract Modal */}
             {isImportModalOpen && (
@@ -479,3 +531,4 @@ export default function ContractsPage() {
         </div>
     );
 }
+

@@ -9,7 +9,7 @@ export ledger _balances: Map<Bytes<32>, Uint<128>>;
 // Flattened composite key: [owner, spender] -> allowance
 export ledger _allowances: Map<[Bytes<32>, Bytes<32>], Uint<128>>;
 export ledger _totalSupply: Uint<128>;
-
+export ledger _maxSupply: Uint<128>;
 export ledger _name: Opaque<"string">;
 export ledger _symbol: Opaque<"string">;
 export ledger _decimals: Uint<8>;
@@ -38,13 +38,20 @@ constructor(
   initialOwner: Bytes<32>,
   name_: Opaque<"string">,
   symbol_: Opaque<"string">,
-  decimals_: Uint<8>
+  decimals_: Uint<8>,
+  maxSupply_: Uint<128>
 ) {
+  const MAX_UINT128 = 340282366920938463463374607431768211455;
   owner = disclose(initialOwner);
   _name = disclose(name_);
   _symbol = disclose(symbol_);
   _decimals = disclose(decimals_);
   _totalSupply = 0;
+  if (disclose(maxSupply_) == 0) {
+    _maxSupply = MAX_UINT128;
+  } else {
+    _maxSupply = disclose(maxSupply_);
+  }
 }
 
 export circuit name(): Opaque<"string"> {
@@ -57,6 +64,10 @@ export circuit symbol(): Opaque<"string"> {
 
 export circuit decimals(): Uint<8> {
   return _decimals;
+}
+
+export circuit maxSupply(): Uint<128> {
+  return _maxSupply;
 }
 
 export circuit totalSupply(): Uint<128> {
@@ -152,11 +163,10 @@ circuit _update(
   to: Bytes<32>,
   value: Uint<128>
 ): [] {
-  const MAX_UINT128 = 340282366920938463463374607431768211455;
-
+  
   if (disclose(isZeroKey(fromAccount))) {
     // Mint operation
-    assert(MAX_UINT128 - _totalSupply >= disclose(value), "FungibleToken: supply overflow");
+    assert(_maxSupply - _totalSupply >= disclose(value), "FungibleToken: supply overflow");
     _totalSupply = (_totalSupply + disclose(value)) as Uint<128>;
   } else {
     const fromBal = balanceOf(fromAccount);
@@ -170,7 +180,7 @@ circuit _update(
     _totalSupply = (_totalSupply - disclose(value)) as Uint<128>;
   } else {
     const toBal = balanceOf(to);
-    assert(MAX_UINT128 - toBal >= disclose(value), "FungibleToken: balance overflow");
+    assert(_maxSupply - toBal >= disclose(value), "FungibleToken: balance overflow");
     _balances.insert(disclose(to), (toBal + disclose(value)) as Uint<128>);
   }
 }
@@ -203,7 +213,7 @@ circuit _spendAllowance(
 ): [] {
   const currentAllowance = allowance(ownerAccount, spender);
   assert(currentAllowance >= disclose(value), "FungibleToken: insufficient allowance");
-
+ 
   const MAX_UINT128 = 340282366920938463463374607431768211455;
   if (disclose(currentAllowance < MAX_UINT128)) {
     _approve(ownerAccount, spender, (currentAllowance - disclose(value)) as Uint<128>);
