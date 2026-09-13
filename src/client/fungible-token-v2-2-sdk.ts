@@ -1,401 +1,411 @@
 /**
- * FungibleTokenV22 TypeScript SDK
- * Production client SDK for interacting with the fungible-token-v2-2 Midnight Compact smart contract.
+ * FungibleTokenV22 Production Client SDK
+ * File: src/client/fungible-token-v2-2-sdk.ts
  */
 
 import {
-  Contract,
-  ledger,
-  type Witnesses,
-  type Ledger,
-} from '../../contracts/managed/fungible-token-v2-2/contract/index.js';
-import type {
-  CircuitContext,
-  WitnessContext,
-  StateValue,
-  ChargedState,
+  type CircuitContext,
+  type QueryContext,
+  type WitnessContext,
+  type ConstructorContext,
+  type ConstructorResult,
+  type CircuitResults,
+  type StateValue,
+  type ChargedState,
 } from '@midnight-ntwrk/compact-runtime';
 
-export interface TokenMetadata {
-  name: string;
-  symbol: string;
-  decimals: bigint;
-  maxSupply: bigint;
-  totalSupply: bigint;
-  owner: Uint8Array;
-  paused: boolean;
-  emergencyPauser: Uint8Array;
+import {
+  Contract as ManagedContract,
+  ledger,
+  type Witnesses as ContractWitnesses,
+  type Ledger as ContractLedger,
+} from '../../contracts/managed/fungible-token-v2-2/contract/index.js';
+
+/**
+ * Off-chain private state stored on the client machine / wallet.
+ */
+export interface FungibleTokenV22PrivateState {
+  readonly secretKey: Uint8Array;
 }
 
-export interface ContractAddressParam {
-  bytes: Uint8Array;
-}
+/**
+ * Strongly-typed public ledger schema matching the Compact contract.
+ */
+export type FungibleTokenV22LedgerState = ContractLedger;
 
-export interface FungibleTokenConfig {
-  initialOwner: Uint8Array;
-  name: string;
-  symbol: string;
-  decimals: bigint;
-  maxSupply: bigint;
-}
+/**
+ * Witness interface mapping to Compact witness declarations.
+ */
+export type FungibleTokenV22Witnesses<PS extends FungibleTokenV22PrivateState = FungibleTokenV22PrivateState> =
+  ContractWitnesses<PS>;
 
-export interface ContractProvider<PS = any> {
-  getState(): Promise<StateValue | ChargedState>;
-  executeCircuit<R>(
-    circuitName: string,
-    executor: (context: CircuitContext<PS>) => { context: CircuitContext<PS>; result: R }
-  ): Promise<R>;
-}
-
-export class FungibleTokenSDK<PS = any> {
-  private readonly contract: Contract<PS, Witnesses<PS>>;
-  private secretKey: Uint8Array;
+/**
+ * High-level TypeScript SDK Client for FungibleTokenV22 smart contract.
+ */
+export class FungibleTokenV22Client<PS extends FungibleTokenV22PrivateState = FungibleTokenV22PrivateState> {
+  public readonly contract: ManagedContract<PS>;
+  public readonly defaultContractSalt: Uint8Array;
 
   /**
-   * Initializes the SDK with a caller secret key.
-   * @param secretKey 32-byte private key used to satisfy the `localSecretKey` witness.
+   * Initializes the client with optional private state and default salt.
+   *
+   * @param initialPrivateState - Optional initial private state containing the caller secret key.
+   * @param defaultContractSalt - Optional 32-byte contract salt for identity derivation.
+   * @param customWitnesses - Optional custom witness overrides.
    */
-  constructor(secretKey: Uint8Array) {
-    if (secretKey.length !== 32) {
-      throw new Error('Secret key must be exactly 32 bytes.');
-    }
-    this.secretKey = secretKey;
+  constructor(
+    initialPrivateState?: PS,
+    defaultContractSalt?: Uint8Array | string,
+    customWitnesses?: Partial<FungibleTokenV22Witnesses<PS>>,
+  ) {
+    this.defaultContractSalt = defaultContractSalt
+      ? FungibleTokenV22Client.toBytes32(defaultContractSalt)
+      : new Uint8Array(32);
 
-    const witnesses: Witnesses<PS> = {
-      localSecretKey: (context: WitnessContext<Ledger, PS>): [PS, Uint8Array] => {
-        return [context.privateState, this.secretKey];
+    const defaultWitnesses = initialPrivateState?.secretKey
+      ? FungibleTokenV22Client.createWitnesses<PS>(initialPrivateState.secretKey)
+      : FungibleTokenV22Client.createWitnesses<PS>(new Uint8Array(32));
+
+    this.contract = new ManagedContract<PS>({
+      ...defaultWitnesses,
+      ...(customWitnesses ?? {}),
+    } as ContractWitnesses<PS>);
+  }
+
+  // ===========================================================================
+  // Utility & Conversion Helpers
+  // ===========================================================================
+
+  /**
+   * Normalizes hex string or Uint8Array to a strict 32-byte Uint8Array.
+   */
+  public static toBytes32(input: Uint8Array | string): Uint8Array {
+    if (typeof input === 'string') {
+      const cleanHex = input.startsWith('0x') ? input.slice(2) : input;
+      if (cleanHex.length === 64) {
+        return Uint8Array.from(Buffer.from(cleanHex, 'hex'));
+      }
+      const buf = new Uint8Array(32);
+      const strBytes = Buffer.from(input, 'utf-8');
+      buf.set(strBytes.subarray(0, 32));
+      return buf;
+    }
+    if (input.length === 32) {
+      return input;
+    }
+    const buf = new Uint8Array(32);
+    buf.set(input.subarray(0, 32));
+    return buf;
+  }
+
+  // ===========================================================================
+  // Cryptographic Account Derivation & Identity Checks
+  // ===========================================================================
+
+  /**
+   * Derives on-chain account commitment from a secret key and contract salt
+   * using the native Compact persistentHash algorithm.
+   *
+   * @param secretKey - The 32-byte private secret key.
+   * @param contractSalt - The 32-byte contract salt.
+   * @returns The 32-byte derived account commitment.
+   */
+  public static deriveAccount(
+    secretKey: Uint8Array | string,
+    contractSalt: string | Uint8Array = new Uint8Array(32),
+  ): Uint8Array {
+    const skBytes = FungibleTokenV22Client.toBytes32(secretKey);
+    const saltBytes = FungibleTokenV22Client.toBytes32(contractSalt);
+    const domainTag = new Uint8Array(32);
+    domainTag.set(Buffer.from('fungible-token:auth', 'utf-8'));
+
+    try {
+      const dummy = new ManagedContract({
+        localSecretKey: (ctx: WitnessContext<ContractLedger, any>) => [ctx.privateState, new Uint8Array(32)],
+      } as any);
+
+      if (typeof (dummy as any)._persistentHash_1 === 'function') {
+        try {
+          return (dummy as any)._persistentHash_1([domainTag, saltBytes, skBytes]);
+        } catch {
+          return (dummy as any)._persistentHash_1([domainTag, { bytes: saltBytes }, skBytes]);
+        }
+      }
+
+      const proto = Object.getPrototypeOf(dummy);
+      const hashMethods = Object.getOwnPropertyNames(proto).filter((k) => k.startsWith('_persistentHash'));
+      for (const m of hashMethods) {
+        try {
+          const r = (dummy as any)[m]([domainTag, saltBytes, skBytes]);
+          if (r instanceof Uint8Array && r.length === 32) return r;
+        } catch {}
+        try {
+          const r = (dummy as any)[m]([domainTag, { bytes: saltBytes }, skBytes]);
+          if (r instanceof Uint8Array && r.length === 32) return r;
+        } catch {}
+      }
+    } catch {}
+
+    throw new Error('Failed to resolve Compact persistentHash for account derivation');
+  }
+
+  /**
+   * Instance method to derive account commitment using this client's configured salt.
+   */
+  public deriveAccount(secretKey: Uint8Array | string, contractSalt?: string | Uint8Array): Uint8Array {
+    return FungibleTokenV22Client.deriveAccount(secretKey, contractSalt ?? this.defaultContractSalt);
+  }
+
+  /**
+   * Returns authenticated caller's account commitment.
+   */
+  public getAuthenticatedCaller(secretKey: Uint8Array | string, contractSalt?: string | Uint8Array): Uint8Array {
+    return this.deriveAccount(secretKey, contractSalt);
+  }
+
+  /**
+   * Verifies whether a private secret key maps to a target on-chain account commitment.
+   */
+  public static isAuthorized(
+    secretKey: Uint8Array | string,
+    targetAccount: Uint8Array | string,
+    contractSalt: string | Uint8Array,
+  ): boolean {
+    const derived = FungibleTokenV22Client.deriveAccount(secretKey, contractSalt);
+    const target = FungibleTokenV22Client.toBytes32(targetAccount);
+    if (derived.length !== target.length) return false;
+    for (let i = 0; i < derived.length; i++) {
+      if (derived[i] !== target[i]) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Creates default witness implementations bound to a given caller secret key.
+   */
+  public static createWitnesses<PS extends FungibleTokenV22PrivateState = FungibleTokenV22PrivateState>(
+    secretKey: Uint8Array | string,
+  ): FungibleTokenV22Witnesses<PS> {
+    const skBytes = FungibleTokenV22Client.toBytes32(secretKey);
+    return {
+      localSecretKey: (context: WitnessContext<ContractLedger, PS>): [PS, Uint8Array] => {
+        const activeKey = context.privateState?.secretKey ?? skBytes;
+        return [context.privateState, activeKey];
       },
     };
-
-    this.contract = new Contract<PS, Witnesses<PS>>(witnesses);
   }
 
+  // ===========================================================================
+  // Contract Initialization
+  // ===========================================================================
+
   /**
-   * Updates the prover's secret key.
+   * Constructs the initial contract state.
    */
-  public setSecretKey(secretKey: Uint8Array): void {
-    if (secretKey.length !== 32) {
-      throw new Error('Secret key must be exactly 32 bytes.');
+  public initialState(
+    context: ConstructorContext<PS>,
+    salt: Uint8Array | string,
+    initialOwner: Uint8Array | string,
+    name: string,
+    symbol: string,
+    decimals: bigint | number,
+    maxSupply: bigint | number,
+  ): ConstructorResult<PS> {
+    const saltBytes = FungibleTokenV22Client.toBytes32(salt);
+    const ownerBytes = FungibleTokenV22Client.toBytes32(initialOwner);
+    const decimalsBig = BigInt(decimals);
+    const maxSupplyBig = BigInt(maxSupply);
+
+    return this.contract.initialState(
+      context,
+      saltBytes,
+      ownerBytes,
+      name,
+      symbol,
+      decimalsBig,
+      maxSupplyBig,
+    );
+  }
+
+  // ===========================================================================
+  // Read-Only & Inspection Helpers (Direct Public Ledger State Queries)
+  // ===========================================================================
+
+  private getState(stateOrContext: StateValue | ChargedState | CircuitContext<PS> | unknown): FungibleTokenV22LedgerState {
+    if (stateOrContext && typeof stateOrContext === 'object' && 'currentQueryContext' in (stateOrContext as any)) {
+      return ledger((stateOrContext as CircuitContext<PS>).currentQueryContext.state);
     }
-    this.secretKey = secretKey;
+    return ledger(stateOrContext as StateValue | ChargedState);
   }
 
-  /**
-   * Returns the underlying contract compiled instance.
-   */
-  public getContract(): Contract<PS, Witnesses<PS>> {
-    return this.contract;
+  public contractSalt(stateOrContext: StateValue | ChargedState | CircuitContext<PS> | unknown): Uint8Array {
+    return this.getState(stateOrContext)._contractSalt;
   }
 
-  // ==========================================
-  // LEDGER / STATE READERS
-  // ==========================================
-
-  /**
-   * Parses the complete ledger state from the on-chain state value.
-   */
-  public parseLedger(state: StateValue | ChargedState): Ledger {
-    return ledger(state);
+  public name(stateOrContext: StateValue | ChargedState | CircuitContext<PS> | unknown): string {
+    return this.getState(stateOrContext)._name;
   }
 
-  /**
-   * Reads token high-level metadata from the contract state.
-   */
-  public getMetadata(state: StateValue | ChargedState): TokenMetadata {
-    const l = this.parseLedger(state);
-    return {
-      name: l._name,
-      symbol: l._symbol,
-      decimals: l._decimals,
-      maxSupply: l._maxSupply,
-      totalSupply: l._totalSupply,
-      owner: l.owner,
-      paused: l._paused,
-      emergencyPauser: l._emergencyPauser,
-    };
+  public symbol(stateOrContext: StateValue | ChargedState | CircuitContext<PS> | unknown): string {
+    return this.getState(stateOrContext)._symbol;
   }
 
-  /**
-   * Queries balance of an account directly from the ledger state.
-   */
-  public getBalanceFromState(state: StateValue | ChargedState, account: Uint8Array): bigint {
-    const l = this.parseLedger(state);
-    if (!l._balances.member(account)) {
-      return 0n;
-    }
-    return l._balances.lookup(account);
+  public decimals(stateOrContext: StateValue | ChargedState | CircuitContext<PS> | unknown): bigint {
+    return this.getState(stateOrContext)._decimals;
   }
 
-  /**
-   * Queries allowance for a owner/spender pair directly from the ledger state.
-   */
-  public getAllowanceFromState(
-    state: StateValue | ChargedState,
-    ownerAccount: Uint8Array,
-    spender: Uint8Array
+  public maxSupply(stateOrContext: StateValue | ChargedState | CircuitContext<PS> | unknown): bigint {
+    return this.getState(stateOrContext)._maxSupply;
+  }
+
+  public totalSupply(stateOrContext: StateValue | ChargedState | CircuitContext<PS> | unknown): bigint {
+    return this.getState(stateOrContext)._totalSupply;
+  }
+
+  public paused(stateOrContext: StateValue | ChargedState | CircuitContext<PS> | unknown): boolean {
+    return this.getState(stateOrContext)._paused;
+  }
+
+  public isPaused(stateOrContext: StateValue | ChargedState | CircuitContext<PS> | unknown): boolean {
+    return this.getState(stateOrContext)._paused;
+  }
+
+  public balanceOf(
+    stateOrContext: StateValue | ChargedState | CircuitContext<PS> | unknown,
+    account: Uint8Array | string,
   ): bigint {
-    const l = this.parseLedger(state);
-    const key: [Uint8Array, Uint8Array] = [ownerAccount, spender];
-    if (!l._allowances.member(key)) {
-      return 0n;
+    const accountBytes = FungibleTokenV22Client.toBytes32(account);
+    const l = this.getState(stateOrContext);
+    return l._balances.member(accountBytes) ? l._balances.lookup(accountBytes) : 0n;
+  }
+
+  public allowance(
+    stateOrContext: StateValue | ChargedState | CircuitContext<PS> | unknown,
+    ownerAccount: Uint8Array | string,
+    spenderAccount: Uint8Array | string,
+  ): bigint {
+    const ownerBytes = FungibleTokenV22Client.toBytes32(ownerAccount);
+    const spenderBytes = FungibleTokenV22Client.toBytes32(spenderAccount);
+    const l = this.getState(stateOrContext);
+    const key: [Uint8Array, Uint8Array] = [ownerBytes, spenderBytes];
+    return l._allowances.member(key) ? l._allowances.lookup(key) : 0n;
+  }
+
+  // ===========================================================================
+  // State Mutating Circuits
+  // ===========================================================================
+
+  public transfer(
+    context: CircuitContext<PS>,
+    caller: Uint8Array | string,
+    to: Uint8Array | string,
+    value: bigint | number,
+  ): CircuitResults<PS, boolean> {
+    const callerBytes = FungibleTokenV22Client.toBytes32(caller);
+    const toBytes = FungibleTokenV22Client.toBytes32(to);
+    return this.contract.circuits.transfer(context, callerBytes, toBytes, BigInt(value));
+  }
+
+  public approve(
+    context: CircuitContext<PS>,
+    caller: Uint8Array | string,
+    spender: Uint8Array | string,
+    value: bigint | number,
+  ): CircuitResults<PS, boolean> {
+    const callerBytes = FungibleTokenV22Client.toBytes32(caller);
+    const spenderBytes = FungibleTokenV22Client.toBytes32(spender);
+    return this.contract.circuits.approve(context, callerBytes, spenderBytes, BigInt(value));
+  }
+
+  public transferFrom(
+    context: CircuitContext<PS>,
+    caller: Uint8Array | string,
+    fromAccount: Uint8Array | string,
+    to: Uint8Array | string,
+    value: bigint | number,
+  ): CircuitResults<PS, boolean> {
+    const callerBytes = FungibleTokenV22Client.toBytes32(caller);
+    const fromBytes = FungibleTokenV22Client.toBytes32(fromAccount);
+    const toBytes = FungibleTokenV22Client.toBytes32(to);
+    return this.contract.circuits.transferFrom(context, callerBytes, fromBytes, toBytes, BigInt(value));
+  }
+
+  public mint(
+    context: CircuitContext<PS>,
+    to: Uint8Array | string,
+    value: bigint | number,
+  ): CircuitResults<PS, boolean> {
+    const toBytes = FungibleTokenV22Client.toBytes32(to);
+    return this.contract.circuits.mint(context, toBytes, BigInt(value));
+  }
+
+  public burn(
+    context: CircuitContext<PS>,
+    caller: Uint8Array | string,
+    value: bigint | number,
+  ): CircuitResults<PS, boolean> {
+    const callerBytes = FungibleTokenV22Client.toBytes32(caller);
+    return this.contract.circuits.burn(context, callerBytes, BigInt(value));
+  }
+
+  public pause(
+    context: CircuitContext<PS>,
+    caller: Uint8Array | string,
+  ): CircuitResults<PS, boolean> {
+    const callerBytes = FungibleTokenV22Client.toBytes32(caller);
+    return this.contract.circuits.pause(context, callerBytes);
+  }
+
+  public unpause(
+    context: CircuitContext<PS>,
+    caller: Uint8Array | string,
+  ): CircuitResults<PS, boolean> {
+    const callerBytes = FungibleTokenV22Client.toBytes32(caller);
+    return this.contract.circuits.unpause(context, callerBytes);
+  }
+
+  public setEmergencyPauser(
+    context: CircuitContext<PS>,
+    caller: Uint8Array | string,
+    newPauser: Uint8Array | string,
+  ): CircuitResults<PS, boolean> {
+    const callerBytes = FungibleTokenV22Client.toBytes32(caller);
+    const pauserBytes = FungibleTokenV22Client.toBytes32(newPauser);
+    return this.contract.circuits.setEmergencyPauser(context, callerBytes, pauserBytes);
+  }
+
+  public emergencyWithdraw(
+    context: CircuitContext<PS>,
+    caller: Uint8Array | string,
+    tokenContractAddress: string | Uint8Array | { bytes: Uint8Array },
+    amount: bigint | number,
+  ): CircuitResults<PS, boolean> {
+    const callerBytes = FungibleTokenV22Client.toBytes32(caller);
+    let tokenParam: { bytes: Uint8Array };
+    if (typeof tokenContractAddress === 'object' && tokenContractAddress !== null && 'bytes' in tokenContractAddress) {
+      tokenParam = tokenContractAddress as { bytes: Uint8Array };
+    } else {
+      tokenParam = { bytes: FungibleTokenV22Client.toBytes32(tokenContractAddress as string | Uint8Array) };
     }
-    return l._allowances.lookup(key);
-  }
-
-  /**
-   * Queries pause status directly from the ledger state.
-   */
-  public isPausedFromState(state: StateValue | ChargedState): boolean {
-    return this.parseLedger(state)._paused;
-  }
-
-  // ==========================================
-  // CIRCUIT EXECUTION METHODS
-  // ==========================================
-
-  /**
-   * Circuit Call: name()
-   */
-  public async name(provider: ContractProvider<PS>): Promise<string> {
-    return provider.executeCircuit('name', (ctx) => this.contract.circuits.name(ctx));
-  }
-
-  /**
-   * Circuit Call: symbol()
-   */
-  public async symbol(provider: ContractProvider<PS>): Promise<string> {
-    return provider.executeCircuit('symbol', (ctx) => this.contract.circuits.symbol(ctx));
-  }
-
-  /**
-   * Circuit Call: decimals()
-   */
-  public async decimals(provider: ContractProvider<PS>): Promise<bigint> {
-    return provider.executeCircuit('decimals', (ctx) => this.contract.circuits.decimals(ctx));
-  }
-
-  /**
-   * Circuit Call: maxSupply()
-   */
-  public async maxSupply(provider: ContractProvider<PS>): Promise<bigint> {
-    return provider.executeCircuit('maxSupply', (ctx) => this.contract.circuits.maxSupply(ctx));
-  }
-
-  /**
-   * Circuit Call: totalSupply()
-   */
-  public async totalSupply(provider: ContractProvider<PS>): Promise<bigint> {
-    return provider.executeCircuit('totalSupply', (ctx) => this.contract.circuits.totalSupply(ctx));
-  }
-
-  /**
-   * Circuit Call: balanceOf(account)
-   */
-  public async balanceOf(provider: ContractProvider<PS>, account: Uint8Array): Promise<bigint> {
-    this.assertBytes32(account, 'account');
-    return provider.executeCircuit('balanceOf', (ctx) =>
-      this.contract.circuits.balanceOf(ctx, account)
+    return this.contract.circuits.emergencyWithdraw(
+      context,
+      callerBytes,
+      tokenParam,
+      BigInt(amount),
     );
   }
 
-  /**
-   * Circuit Call: allowance(ownerAccount, spender)
-   */
-  public async allowance(
-    provider: ContractProvider<PS>,
-    ownerAccount: Uint8Array,
-    spender: Uint8Array
-  ): Promise<bigint> {
-    this.assertBytes32(ownerAccount, 'ownerAccount');
-    this.assertBytes32(spender, 'spender');
-    return provider.executeCircuit('allowance', (ctx) =>
-      this.contract.circuits.allowance(ctx, ownerAccount, spender)
-    );
-  }
+  // ===========================================================================
+  // Ledger Parsing & Inspection
+  // ===========================================================================
 
   /**
-   * Circuit Call: paused()
+   * Parses raw query context or charged state into typed Ledger fields.
    */
-  public async paused(provider: ContractProvider<PS>): Promise<boolean> {
-    return provider.executeCircuit('paused', (ctx) => this.contract.circuits.paused(ctx));
-  }
-
-  /**
-   * Circuit Call: pause(caller)
-   */
-  public async pause(provider: ContractProvider<PS>, caller: Uint8Array): Promise<boolean> {
-    this.assertBytes32(caller, 'caller');
-    return provider.executeCircuit('pause', (ctx) => this.contract.circuits.pause(ctx, caller));
-  }
-
-  /**
-   * Circuit Call: unpause(caller)
-   */
-  public async unpause(provider: ContractProvider<PS>, caller: Uint8Array): Promise<boolean> {
-    this.assertBytes32(caller, 'caller');
-    return provider.executeCircuit('unpause', (ctx) => this.contract.circuits.unpause(ctx, caller));
-  }
-
-  /**
-   * Circuit Call: setEmergencyPauser(caller, newPauser)
-   */
-  public async setEmergencyPauser(
-    provider: ContractProvider<PS>,
-    caller: Uint8Array,
-    newPauser: Uint8Array
-  ): Promise<boolean> {
-    this.assertBytes32(caller, 'caller');
-    this.assertBytes32(newPauser, 'newPauser');
-    return provider.executeCircuit('setEmergencyPauser', (ctx) =>
-      this.contract.circuits.setEmergencyPauser(ctx, caller, newPauser)
-    );
-  }
-
-  /**
-   * Circuit Call: transfer(caller, to, value)
-   */
-  public async transfer(
-    provider: ContractProvider<PS>,
-    caller: Uint8Array,
-    to: Uint8Array,
-    value: bigint
-  ): Promise<boolean> {
-    this.assertBytes32(caller, 'caller');
-    this.assertBytes32(to, 'to');
-    this.assertPositiveValue(value);
-    return provider.executeCircuit('transfer', (ctx) =>
-      this.contract.circuits.transfer(ctx, caller, to, value)
-    );
-  }
-
-  /**
-   * Circuit Call: approve(caller, spender, value)
-   */
-  public async approve(
-    provider: ContractProvider<PS>,
-    caller: Uint8Array,
-    spender: Uint8Array,
-    value: bigint
-  ): Promise<boolean> {
-    this.assertBytes32(caller, 'caller');
-    this.assertBytes32(spender, 'spender');
-    this.assertPositiveValue(value);
-    return provider.executeCircuit('approve', (ctx) =>
-      this.contract.circuits.approve(ctx, caller, spender, value)
-    );
-  }
-
-  /**
-   * Circuit Call: transferFrom(caller, fromAccount, to, value)
-   */
-  public async transferFrom(
-    provider: ContractProvider<PS>,
-    caller: Uint8Array,
-    fromAccount: Uint8Array,
-    to: Uint8Array,
-    value: bigint
-  ): Promise<boolean> {
-    this.assertBytes32(caller, 'caller');
-    this.assertBytes32(fromAccount, 'fromAccount');
-    this.assertBytes32(to, 'to');
-    this.assertPositiveValue(value);
-    return provider.executeCircuit('transferFrom', (ctx) =>
-      this.contract.circuits.transferFrom(ctx, caller, fromAccount, to, value)
-    );
-  }
-
-  /**
-   * Circuit Call: mint(to, value)
-   */
-  public async mint(
-    provider: ContractProvider<PS>,
-    to: Uint8Array,
-    value: bigint
-  ): Promise<boolean> {
-    this.assertBytes32(to, 'to');
-    this.assertPositiveValue(value);
-    return provider.executeCircuit('mint', (ctx) =>
-      this.contract.circuits.mint(ctx, to, value)
-    );
-  }
-
-  /**
-   * Circuit Call: burn(caller, value)
-   */
-  public async burn(
-    provider: ContractProvider<PS>,
-    caller: Uint8Array,
-    value: bigint
-  ): Promise<boolean> {
-    this.assertBytes32(caller, 'caller');
-    this.assertPositiveValue(value);
-    return provider.executeCircuit('burn', (ctx) =>
-      this.contract.circuits.burn(ctx, caller, value)
-    );
-  }
-
-  /**
-   * Circuit Call: emergencyWithdraw(caller, token, amount)
-   */
-  public async emergencyWithdraw(
-    provider: ContractProvider<PS>,
-    caller: Uint8Array,
-    tokenAddress: Uint8Array,
-    amount: bigint
-  ): Promise<boolean> {
-    this.assertBytes32(caller, 'caller');
-    this.assertPositiveValue(amount);
-    const tokenParam: ContractAddressParam = { bytes: tokenAddress };
-    return provider.executeCircuit('emergencyWithdraw', (ctx) =>
-      this.contract.circuits.emergencyWithdraw(ctx, caller, tokenParam, amount)
-    );
-  }
-
-  // ==========================================
-  // UTILITIES & VALIDATORS
-  // ==========================================
-
-  private assertBytes32(bytes: Uint8Array, paramName: string): void {
-    if (!bytes || bytes.length !== 32) {
-      throw new Error(`Invalid parameter ${paramName}: Expected 32 bytes Uint8Array.`);
-    }
-  }
-
-  private assertPositiveValue(val: bigint): void {
-    if (val < 0n) {
-      throw new Error(`Amount/value cannot be negative: received ${val}`);
-    }
-  }
-
-  /**
-   * Utility to convert hex string (with or without 0x) to Uint8Array.
-   */
-  public static hexToBytes(hex: string): Uint8Array {
-    const cleanHex = hex.startsWith('0x') ? hex.slice(2) : hex;
-    if (cleanHex.length % 2 !== 0) {
-      throw new Error('Invalid hex string length');
-    }
-    const arr = new Uint8Array(cleanHex.length / 2);
-    for (let i = 0; i < cleanHex.length; i += 2) {
-      arr[i / 2] = parseInt(cleanHex.substring(i, i + 2), 16);
-    }
-    return arr;
-  }
-
-  /**
-   * Utility to convert Uint8Array to hex string.
-   */
-  public static bytesToHex(bytes: Uint8Array): string {
-    return '0x' + Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  /**
-   * Creates a padded 32-byte array from an ASCII string.
-   */
-  public static stringToPaddedBytes32(str: string): Uint8Array {
-    const out = new Uint8Array(32);
-    const enc = new TextEncoder().encode(str);
-    out.set(enc.slice(0, 32));
-    return out;
+  public queryLedgerStateFromRaw(rawState: StateValue | ChargedState | unknown): FungibleTokenV22LedgerState {
+    return ledger(rawState as StateValue | ChargedState);
   }
 }
+
+// SDK Alias Export
+export { FungibleTokenV22Client as FungibleTokenV22SDK };

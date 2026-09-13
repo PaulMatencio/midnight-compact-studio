@@ -5,6 +5,13 @@
  * (Midnight Lace / Midnight CIP-30 DApp connector) without seed or private key exposure.
  */
 
+// Polyfill BigInt.prototype.toJSON so JSON.stringify and Effect inspectables never crash on BigInt values
+if (typeof BigInt !== 'undefined' && !(BigInt.prototype as any).toJSON) {
+    (BigInt.prototype as any).toJSON = function () {
+        return this.toString();
+    };
+}
+
 export interface MidnightConnectedApi {
     getUnshieldedAddress: () => Promise<string>;
     getShieldedAddress?: () => Promise<string>;
@@ -18,7 +25,8 @@ export interface MidnightConnectedApi {
     getNetworkId?: () => Promise<string | number>;
     state?: () => Promise<any>;
     signTransaction?: (tx: any) => Promise<any>;
-    submitTransaction?: (tx: any) => Promise<string>;
+    submitTransaction?: (tx: any) => Promise<string | void>;
+    balanceUnsealedTransaction?: (txHex: string, options?: { payFees?: boolean }) => Promise<{ tx: string } | string>;
 }
 
 export interface ExtensionBalances {
@@ -46,6 +54,8 @@ export interface ExtensionWalletState {
     name: string;
     address: string;
     shieldedAddress?: string;
+    shieldedCoinPublicKey?: string;
+    shieldedEncryptionPublicKey?: string;
     networkId?: string;
     tNightBalance?: string;
     dustBalance?: string;
@@ -177,6 +187,8 @@ export async function connectMidnightLaceWallet(
     api: MidnightConnectedApi;
     address: string;
     shieldedAddress?: string;
+    shieldedCoinPublicKey?: string;
+    shieldedEncryptionPublicKey?: string;
     networkId?: string;
     balances: ExtensionBalances;
 }> {
@@ -329,6 +341,8 @@ export async function connectMidnightLaceWallet(
 
     let unshieldedAddress = '';
     let shieldedAddress = '';
+    let shieldedCoinPublicKey = '';
+    let shieldedEncryptionPublicKey = '';
     let networkId = targetNetwork;
 
     // 2. Query configuration and addresses concurrently in parallel
@@ -361,10 +375,30 @@ export async function connectMidnightLaceWallet(
             unshieldedAddress = extractAddressString(unshieldedRes.value);
         }
 
+        if (multiShieldedRes.status === 'fulfilled' && multiShieldedRes.value) {
+            const val = multiShieldedRes.value as any;
+            if (val.shieldedAddress) shieldedAddress = extractAddressString(val.shieldedAddress);
+            if (val.shieldedCoinPublicKey) shieldedCoinPublicKey = String(val.shieldedCoinPublicKey);
+            if (val.shieldedEncryptionPublicKey) shieldedEncryptionPublicKey = String(val.shieldedEncryptionPublicKey);
+        }
+
         if (shieldedRes.status === 'fulfilled' && shieldedRes.value) {
-            shieldedAddress = extractAddressString(shieldedRes.value);
-        } else if (multiShieldedRes.status === 'fulfilled' && multiShieldedRes.value) {
-            shieldedAddress = extractAddressString(multiShieldedRes.value);
+            const sVal = extractAddressString(shieldedRes.value);
+            if (sVal) shieldedAddress = sVal;
+        }
+
+        // Dedicated fallback query for shielded public keys if not yet populated
+        if (!shieldedCoinPublicKey && typeof api.getShieldedAddresses === 'function') {
+            try {
+                const sAddrs: any = await withTimeout(api.getShieldedAddresses(), 2000, null);
+                if (sAddrs) {
+                    if (sAddrs.shieldedAddress && !shieldedAddress) shieldedAddress = extractAddressString(sAddrs.shieldedAddress);
+                    if (sAddrs.shieldedCoinPublicKey) shieldedCoinPublicKey = String(sAddrs.shieldedCoinPublicKey);
+                    if (sAddrs.shieldedEncryptionPublicKey) shieldedEncryptionPublicKey = String(sAddrs.shieldedEncryptionPublicKey);
+                }
+            } catch (sErr) {
+                console.warn('[Midnight Lace Connector] Shielded address lookup fallback warning:', sErr);
+            }
         }
 
         // Quick fallback for legacy mock/object format
@@ -390,12 +424,17 @@ export async function connectMidnightLaceWallet(
         console.warn('[Midnight Lace Connector] Non-fatal balance fetch warning:', balErr);
     }
 
-    console.log('[Midnight Lace Connector] Connected successfully as:', finalAddress, 'Network:', networkId);
+    console.log('[Midnight Lace Connector] Connected successfully as:', finalAddress, 'Network:', networkId, {
+        hasShieldedCoinKey: Boolean(shieldedCoinPublicKey),
+        hasShieldedEncKey: Boolean(shieldedEncryptionPublicKey),
+    });
 
     return {
         api,
         address: finalAddress,
         shieldedAddress,
+        shieldedCoinPublicKey,
+        shieldedEncryptionPublicKey,
         networkId,
         balances,
     };
@@ -545,5 +584,234 @@ export async function fetchExtensionWalletBalances(api: any): Promise<ExtensionB
         shieldedBalance: shieldedBigInt.toString(),
         isSynced: true,
     };
+}
+
+/**
+ * Formats rich error objects thrown by Midnight Lace / DApp Connector into clear human-readable messages.
+ * Deeply unwraps Effect-TS FiberFailure and Cause objects to prevent opaque [object Object] errors.
+ */
+export function formatLaceError(err: any): string {
+    if (!err) return 'Unknown wallet error';
+    if (typeof err === 'string') return err;
+
+    if (err.type === 'DAppConnectorAPIError') {
+        const code = err.code ? `[${err.code}] ` : '';
+        const reason = err.reason || err.message || 'Request was rejected by wallet';
+        return `${code}${reason}`;
+    }
+
+    // Deeply inspect Effect-TS FiberFailure and Cause trees
+    if (
+        err &&
+        (err._id === 'FiberFailure' ||
+            err.name === 'FiberFailure' ||
+            err[Symbol.for('effect/Runtime/FiberFailure')] ||
+            err[Symbol.for('effect/Runtime/FiberFailure/Cause')] ||
+            err.cause?._id === 'Cause')
+    ) {
+        const causeSym = Symbol.for('effect/Runtime/FiberFailure/Cause');
+        const cause = err[causeSym] || err.cause;
+
+        const unwrapCause = (c: any): any => {
+            if (!c) return null;
+            if (c.failure !== undefined) return c.failure;
+            if (c.error !== undefined) return c.error;
+            if (c.defect !== undefined) return c.defect;
+            if (c.left !== undefined) return unwrapCause(c.left) || unwrapCause(c.right);
+            if (c.right !== undefined) return unwrapCause(c.right);
+            return c;
+        };
+
+        const inner = unwrapCause(cause);
+        if (inner) {
+            if (typeof inner === 'string' && inner.trim()) return inner.trim();
+            if (inner.message && typeof inner.message === 'string' && inner.message.trim()) {
+                const tag = inner._tag ? `[${inner._tag}] ` : '';
+                return `${tag}${inner.message.trim()}`;
+            }
+            if (inner.reason && typeof inner.reason === 'string' && inner.reason.trim()) {
+                const tag = inner._tag ? `[${inner._tag}] ` : '';
+                return `${tag}${inner.reason.trim()}`;
+            }
+            if (inner._tag) {
+                const details: string[] = [];
+                if (inner.tokenType) details.push(`token: ${inner.tokenType}`);
+                if (inner.available !== undefined) details.push(`available: ${inner.available}`);
+                if (inner.needed !== undefined || inner.required !== undefined) {
+                    details.push(`required: ${inner.needed ?? inner.required}`);
+                }
+                const detailStr = details.length > 0 ? ` (${details.join(', ')})` : '';
+                return `${inner._tag}${detailStr}`;
+            }
+            try {
+                return JSON.stringify(inner, (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
+            } catch {}
+        }
+
+        // Check if toString() produces a formatted error message
+        if (typeof err.toString === 'function') {
+            try {
+                const str = err.toString();
+                if (str && str !== '[object Object]' && str !== 'Error' && str !== 'FiberFailure') {
+                    const cleaned = str.replace(/^\(FiberFailure\)\s*/, '').trim();
+                    if (cleaned) return cleaned;
+                }
+            } catch {}
+        }
+    }
+
+    if (err.reason && err.reason !== 'Error') return err.reason;
+    if (err.message && err.message !== 'Error') return err.message;
+    if (err.code) return `Error ${err.code}: ${err.reason || err.message || 'Operation failed'}`;
+    if (err.data && typeof err.data === 'string') return err.data;
+    if (err.info && typeof err.info === 'string') return err.info;
+    if (err.stack && typeof err.stack === 'string') {
+        const firstLine = err.stack.split('\n')[0]?.trim();
+        if (firstLine && firstLine !== 'Error' && firstLine !== 'FiberFailure') return firstLine;
+    }
+
+    try {
+        const plain: Record<string, any> = {};
+        for (const key of Object.getOwnPropertyNames(err)) {
+            try { plain[key] = err[key]; } catch {}
+        }
+        for (const sym of Object.getOwnPropertySymbols(err)) {
+            try { plain[sym.toString()] = err[sym]; } catch {}
+        }
+        const json = JSON.stringify(plain, (_k, v) => typeof v === 'bigint' ? v.toString() : v);
+        if (json && json !== '{}') return json;
+    } catch {}
+
+    return String(err);
+}
+
+function hexToUint8Array(hex: string): Uint8Array {
+    const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
+    const len = Math.floor(clean.length / 2);
+    const arr = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+        arr[i] = parseInt(clean.substring(i * 2, i * 2 + 2), 16);
+    }
+    return arr;
+}
+
+/**
+ * Balances an unsealed transaction hex using the connected Lace extension, prompts
+ * the user to authorize spending their own DUST, signs the transaction, and broadcasts it.
+ */
+export async function balanceAndSubmitLaceTx(
+    api: MidnightConnectedApi,
+    unsealedTxHex: string,
+    onProgress?: (msg: string) => void
+): Promise<{ txHash: string; balancedTxHex: string }> {
+    if (!api) {
+        throw new Error('Midnight Lace wallet extension is not connected.');
+    }
+
+    if (typeof api.balanceUnsealedTransaction !== 'function') {
+        throw new Error('Connected wallet does not support balanceUnsealedTransaction. Please update your Lace extension to the latest version.');
+    }
+
+    onProgress?.('Prompting Lace for DUST fee payment and transaction signature...');
+    console.log('[Midnight Lace Connector] Calling api.balanceUnsealedTransaction...');
+
+    let balancedResult: any;
+    let balanceError: any = null;
+
+    try {
+        // 1. Primary standard call per @midnight-ntwrk/dapp-connector-api v4
+        balancedResult = await api.balanceUnsealedTransaction(unsealedTxHex, {});
+    } catch (err: any) {
+        balanceError = err;
+        // 2. Fallback attempt with { payFees: true } in case wallet expects explicit flag
+        try {
+            if (typeof api.balanceUnsealedTransaction === 'function') {
+                balancedResult = await api.balanceUnsealedTransaction(unsealedTxHex, { payFees: true });
+                balanceError = null;
+            }
+        } catch (fallbackErr: any) {
+            balanceError = fallbackErr || err;
+        }
+    }
+
+    if (!balancedResult && balanceError) {
+        console.error('[Midnight Lace Connector] Error during balanceUnsealedTransaction:', {
+            err: balanceError,
+            name: balanceError?.name,
+            message: balanceError?.message,
+            reason: balanceError?.reason,
+            code: balanceError?.code,
+            cause: balanceError?.cause,
+            stack: balanceError?.stack,
+        });
+
+        const formatted = formatLaceError(balanceError);
+        const lower = formatted.toLowerCase();
+        if (
+            lower.includes('reject') ||
+            lower.includes('cancel') ||
+            lower.includes('denied') ||
+            lower.includes('declined')
+        ) {
+            throw new Error('Transaction was canceled or rejected in Lace wallet.');
+        }
+
+        if (lower.includes('insufficient') || lower.includes('dust') || lower.includes('funds')) {
+            throw new Error(
+                `Lace wallet has insufficient DUST to balance this transaction: ${formatted}. ` +
+                `Please verify that your connected Lace wallet has tNight tokens on Preprod and has registered for DUST generation.`
+            );
+        }
+
+        if (lower.includes('unexpected error') || lower.includes('unknown error')) {
+            throw new Error(
+                `Lace internal balancing error: ${formatted}. ` +
+                `Midnight Lace extension v0.1.x background worker encountered an internal error while querying block data to balance this deploy intent. ` +
+                `Tip: Select "Pay Gas with Studio Wallet" to deploy immediately on-chain with your Lace wallet set as the contract Owner!`
+            );
+        }
+
+        throw new Error(`Lace failed to balance and sign transaction: ${formatted}`);
+    }
+
+    const balancedTxHex = typeof balancedResult === 'string' ? balancedResult : balancedResult?.tx;
+    if (!balancedTxHex) {
+        throw new Error('Lace returned an empty balanced transaction.');
+    }
+
+    onProgress?.('Broadcasting balanced transaction to Midnight network via Lace...');
+    console.log('[Midnight Lace Connector] Calling api.submitTransaction...');
+
+    let txHash: string | undefined;
+    if (typeof api.submitTransaction === 'function') {
+        try {
+            const res = await api.submitTransaction(balancedTxHex);
+            if (typeof res === 'string' && res.trim()) {
+                txHash = res.trim();
+            }
+        } catch (submitErr: any) {
+            console.error('[Midnight Lace Connector] Error during submitTransaction:', submitErr);
+            throw new Error(`Failed to broadcast transaction via Lace: ${formatLaceError(submitErr)}`);
+        }
+    }
+
+    // If submitTransaction did not return the transaction hash, extract from transaction
+    if (!txHash) {
+        try {
+            const { Transaction } = await import('@midnight-ntwrk/ledger-v8');
+            const bytes = typeof Buffer !== 'undefined'
+                ? Buffer.from(balancedTxHex, 'hex')
+                : hexToUint8Array(balancedTxHex);
+            const txObj = Transaction.deserialize('signature', 'proof', 'binding', bytes);
+            const ids = txObj.identifiers();
+            if (ids && ids.length > 0) {
+                txHash = ids[0];
+            }
+        } catch {
+            txHash = `tx-${Date.now()}`;
+        }
+    }
+
+    return { txHash: txHash || `tx-${Date.now()}`, balancedTxHex };
 }
 

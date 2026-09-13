@@ -4,104 +4,6 @@
   "runtime-version": "0.16.0",
   "circuits": [
     {
-      "name": "name",
-      "pure": false,
-      "proof": true,
-      "arguments": [
-      ],
-      "result-type": {
-        "type-name": "Opaque",
-        "tsType": "string"
-      }
-    },
-    {
-      "name": "symbol",
-      "pure": false,
-      "proof": true,
-      "arguments": [
-      ],
-      "result-type": {
-        "type-name": "Opaque",
-        "tsType": "string"
-      }
-    },
-    {
-      "name": "decimals",
-      "pure": false,
-      "proof": true,
-      "arguments": [
-      ],
-      "result-type": {
-        "type-name": "Uint",
-        "maxval": 255
-      }
-    },
-    {
-      "name": "maxSupply",
-      "pure": false,
-      "proof": true,
-      "arguments": [
-      ],
-      "result-type": {
-        "type-name": "Uint",
-        "maxval": 340282366920938463463374607431768211455
-      }
-    },
-    {
-      "name": "totalSupply",
-      "pure": false,
-      "proof": true,
-      "arguments": [
-      ],
-      "result-type": {
-        "type-name": "Uint",
-        "maxval": 340282366920938463463374607431768211455
-      }
-    },
-    {
-      "name": "balanceOf",
-      "pure": false,
-      "proof": true,
-      "arguments": [
-        {
-          "name": "account",
-          "type": {
-            "type-name": "Bytes",
-            "length": 32
-          }
-        }
-      ],
-      "result-type": {
-        "type-name": "Uint",
-        "maxval": 340282366920938463463374607431768211455
-      }
-    },
-    {
-      "name": "allowance",
-      "pure": false,
-      "proof": true,
-      "arguments": [
-        {
-          "name": "ownerAccount",
-          "type": {
-            "type-name": "Bytes",
-            "length": 32
-          }
-        },
-        {
-          "name": "spender",
-          "type": {
-            "type-name": "Bytes",
-            "length": 32
-          }
-        }
-      ],
-      "result-type": {
-        "type-name": "Uint",
-        "maxval": 340282366920938463463374607431768211455
-      }
-    },
-    {
       "name": "pause",
       "pure": false,
       "proof": true,
@@ -154,16 +56,6 @@
             "length": 32
           }
         }
-      ],
-      "result-type": {
-        "type-name": "Boolean"
-      }
-    },
-    {
-      "name": "paused",
-      "pure": false,
-      "proof": true,
-      "arguments": [
       ],
       "result-type": {
         "type-name": "Boolean"
@@ -470,8 +362,18 @@
       }
     },
     {
-      "name": "_paused",
+      "name": "_contractSalt",
       "index": 8,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "_paused",
+      "index": 9,
       "exported": true,
       "storage": "Cell",
       "type": {
@@ -480,7 +382,7 @@
     },
     {
       "name": "_emergencyPauser",
-      "index": 9,
+      "index": 10,
       "exported": true,
       "storage": "Cell",
       "type": {

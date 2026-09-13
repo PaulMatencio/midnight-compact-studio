@@ -72,10 +72,12 @@ export async function GET() {
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
-        const { seed, contractType = 'hello-world', privateStatePassword, constructorArgs } = body;
+        const { seed, contractType = 'hello-world', privateStatePassword, constructorArgs, deployerAddress } = body;
 
-        if (!seed) {
-            return NextResponse.json({ success: false, error: 'Seed is required to deploy a contract.' }, { status: 400 });
+        const effectiveSeed = seed?.trim() || process.env.WALLET_SEED?.trim() || process.env.MIDNIGHT_WALLET_SEED?.trim();
+
+        if (!effectiveSeed) {
+            return NextResponse.json({ success: false, error: 'A wallet seed or server wallet is required to deploy a contract.' }, { status: 400 });
         }
 
         // Determine effective password
@@ -104,10 +106,11 @@ export async function POST(req: NextRequest) {
         }
 
         const result = await container.deployContractUseCase.execute({
-            seed,
+            seed: effectiveSeed,
             contractType,
             privateStatePassword: effectivePassword,
             constructorArgs,
+            deployerAddress,
         });
 
         return NextResponse.json({ success: true, data: result });

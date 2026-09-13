@@ -20,6 +20,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import type { TxRecord } from '@/src/types/tx';
+import { formatDustFee } from '@/src/lib/dust-utils';
 
 interface TransactionFeedProps {
   transactions: TxRecord[];
@@ -321,7 +322,7 @@ export const TransactionFeed: React.FC<TransactionFeedProps> = ({ transactions }
                     tx.dustPaid && tx.dustPaid !== '0' && (
                       <span className="flex items-center space-x-1 text-amber-300 font-semibold">
                         <Flame className="h-3 w-3 text-amber-400" />
-                        <span>{BigInt(tx.dustPaid).toLocaleString()} DUST</span>
+                        <span>{formatDustFee(tx.dustPaid)}</span>
                       </span>
                     )
                   )}

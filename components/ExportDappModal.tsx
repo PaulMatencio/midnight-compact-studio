@@ -29,6 +29,16 @@ interface ExportDappModalProps {
     contractAddress?: string;
 }
 
+function isPlaceholderAddress(addr?: string | null): boolean {
+    if (!addr) return true;
+    const trimmed = addr.trim();
+    if (trimmed.length === 0) return true;
+    if (trimmed === '0000000000000000000000000000000000000000000000000000000000000000') return true;
+    if (!/[1-9a-fA-F]/.test(trimmed)) return true;
+    if (trimmed.toLowerCase() === 'undefined' || trimmed.toLowerCase() === 'null') return true;
+    return false;
+}
+
 export function ExportDappModal({
     isOpen,
     onClose,
@@ -47,7 +57,7 @@ export function ExportDappModal({
 
     // Deployment config state loaded from midnight.config.ts defaults and current contract
     const [contractAddress, setContractAddress] = useState<string>(
-        initialContractAddress || '0000000000000000000000000000000000000000000000000000000000000000'
+        !isPlaceholderAddress(initialContractAddress) ? initialContractAddress!.trim() : ''
     );
     const [networkId, setNetworkId] = useState<string>(MIDNIGHT_CONFIG.networkId);
     const [indexerUrl, setIndexerUrl] = useState<string>(MIDNIGHT_CONFIG.indexer);
@@ -60,8 +70,8 @@ export function ExportDappModal({
     useEffect(() => {
         if (!isOpen) return;
 
-        if (initialContractAddress && initialContractAddress !== '0000000000000000000000000000000000000000000000000000000000000000') {
-            setContractAddress(initialContractAddress);
+        if (!isPlaceholderAddress(initialContractAddress)) {
+            setContractAddress(initialContractAddress!.trim());
             return;
         }
 
@@ -71,18 +81,24 @@ export function ExportDappModal({
                 const data = await res.json();
                 if (data?.success && data?.data?.deployments?.length > 0) {
                     const list: any[] = data.data.deployments;
-                    const cleanName = (contractFilename || '').replace(/\.compact$/i, '').toLowerCase();
+                    const cleanName = cleanContractName.toLowerCase();
+                    const cleanNorm = cleanName.replace(/[^a-z0-9]/g, '');
+
                     const exactMatch = list.find((d) => (d.contractType || '').toLowerCase() === cleanName);
                     const matched =
                         exactMatch ||
                         list.find((d) => {
+                            const typeNorm = (d.contractType || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+                            return typeNorm === cleanNorm;
+                        }) ||
+                        list.find((d) => {
                             const type = (d.contractType || '').toLowerCase();
                             const nick = (d.nickname || '').toLowerCase();
-                            return type === cleanName || nick.includes(cleanName) || cleanName.includes(type);
+                            return nick.includes(cleanName) || cleanName.includes(type) || type.includes(cleanName);
                         }) ||
                         list[0];
 
-                    if (matched?.contractAddress) {
+                    if (matched?.contractAddress && !isPlaceholderAddress(matched.contractAddress)) {
                         setContractAddress(matched.contractAddress);
                     }
                 }
@@ -98,12 +114,13 @@ export function ExportDappModal({
     const loadPreview = async () => {
         setIsLoading(true);
         try {
+            const addrParam = !isPlaceholderAddress(contractAddress)
+                ? `&contractAddress=${encodeURIComponent(contractAddress.trim())}`
+                : '';
             const res = await fetch(
                 `/api/workspace/export-dapp?contract=${encodeURIComponent(
                     cleanContractName
-                )}&preview=true&contractAddress=${encodeURIComponent(
-                    contractAddress
-                )}&networkId=${encodeURIComponent(networkId)}&indexerUrl=${encodeURIComponent(
+                )}&preview=true${addrParam}&networkId=${encodeURIComponent(networkId)}&indexerUrl=${encodeURIComponent(
                     indexerUrl
                 )}&nodeUrl=${encodeURIComponent(nodeUrl)}&proofServerUrl=${encodeURIComponent(
                     proofServerUrl
@@ -117,7 +134,8 @@ export function ExportDappModal({
                 setMasterPrompt(data.masterPrompt || '');
                 if (
                     data.deploymentConfig?.contractAddress &&
-                    (!contractAddress || contractAddress === '0000000000000000000000000000000000000000000000000000000000000000')
+                    !isPlaceholderAddress(data.deploymentConfig.contractAddress) &&
+                    isPlaceholderAddress(contractAddress)
                 ) {
                     setContractAddress(data.deploymentConfig.contractAddress);
                 }
@@ -185,7 +203,7 @@ export function ExportDappModal({
                     contract: cleanContractName,
                     deploymentConfig: {
                         contractName: cleanContractName,
-                        contractAddress,
+                        contractAddress: !isPlaceholderAddress(contractAddress) ? contractAddress.trim() : undefined,
                         networkId,
                         indexerUrl,
                         indexerWsUrl: indexerUrl.replace(/^http/, 'ws') + (indexerUrl.endsWith('/ws') ? '' : '/ws'),
@@ -498,8 +516,7 @@ export function ExportDappModal({
                                                 Deployed Contract Address (Hex)
                                             </label>
                                             {contractAddress &&
-                                                contractAddress !==
-                                                    '0000000000000000000000000000000000000000000000000000000000000000' && (
+                                                !isPlaceholderAddress(contractAddress) && (
                                                     <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                                                         <CheckCircle2 className="h-2.5 w-2.5" />
                                                         <span>Active Contract</span>

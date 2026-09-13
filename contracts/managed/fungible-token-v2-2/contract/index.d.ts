@@ -5,21 +5,11 @@ export type Witnesses<PS> = {
 }
 
 export type ImpureCircuits<PS> = {
-  name(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
-  symbol(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
-  decimals(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  maxSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  totalSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  balanceOf(context: __compactRuntime.CircuitContext<PS>, account_0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
-  allowance(context: __compactRuntime.CircuitContext<PS>,
-            ownerAccount_0: Uint8Array,
-            spender_0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
   pause(context: __compactRuntime.CircuitContext<PS>, caller_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
   unpause(context: __compactRuntime.CircuitContext<PS>, caller_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
   setEmergencyPauser(context: __compactRuntime.CircuitContext<PS>,
                      caller_0: Uint8Array,
                      newPauser_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
-  paused(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, boolean>;
   transfer(context: __compactRuntime.CircuitContext<PS>,
            caller_0: Uint8Array,
            to_0: Uint8Array,
@@ -46,21 +36,11 @@ export type ImpureCircuits<PS> = {
 }
 
 export type ProvableCircuits<PS> = {
-  name(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
-  symbol(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
-  decimals(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  maxSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  totalSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  balanceOf(context: __compactRuntime.CircuitContext<PS>, account_0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
-  allowance(context: __compactRuntime.CircuitContext<PS>,
-            ownerAccount_0: Uint8Array,
-            spender_0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
   pause(context: __compactRuntime.CircuitContext<PS>, caller_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
   unpause(context: __compactRuntime.CircuitContext<PS>, caller_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
   setEmergencyPauser(context: __compactRuntime.CircuitContext<PS>,
                      caller_0: Uint8Array,
                      newPauser_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
-  paused(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, boolean>;
   transfer(context: __compactRuntime.CircuitContext<PS>,
            caller_0: Uint8Array,
            to_0: Uint8Array,
@@ -90,21 +70,11 @@ export type PureCircuits = {
 }
 
 export type Circuits<PS> = {
-  name(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
-  symbol(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
-  decimals(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  maxSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  totalSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  balanceOf(context: __compactRuntime.CircuitContext<PS>, account_0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
-  allowance(context: __compactRuntime.CircuitContext<PS>,
-            ownerAccount_0: Uint8Array,
-            spender_0: Uint8Array): __compactRuntime.CircuitResults<PS, bigint>;
   pause(context: __compactRuntime.CircuitContext<PS>, caller_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
   unpause(context: __compactRuntime.CircuitContext<PS>, caller_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
   setEmergencyPauser(context: __compactRuntime.CircuitContext<PS>,
                      caller_0: Uint8Array,
                      newPauser_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
-  paused(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, boolean>;
   transfer(context: __compactRuntime.CircuitContext<PS>,
            caller_0: Uint8Array,
            to_0: Uint8Array,
@@ -151,6 +121,7 @@ export type Ledger = {
   readonly _symbol: string;
   readonly _decimals: bigint;
   readonly owner: Uint8Array;
+  readonly _contractSalt: Uint8Array;
   readonly _paused: boolean;
   readonly _emergencyPauser: Uint8Array;
 }
@@ -166,6 +137,7 @@ export declare class Contract<PS = any, W extends Witnesses<PS> = Witnesses<PS>>
   provableCircuits: ProvableCircuits<PS>;
   constructor(witnesses: W);
   initialState(context: __compactRuntime.ConstructorContext<PS>,
+               salt__0: Uint8Array,
                initialOwner_0: Uint8Array,
                name__0: string,
                symbol__0: string,

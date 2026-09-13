@@ -457,7 +457,7 @@ Ask a question below or click one of the quick actions to get started!`,
         setTimeout(() => setCopiedIndex(null), 2000);
     };
 
-    const detectFileMeta = (code: string, language: string, rawFilename: string) => {
+    const detectFileMeta = (code: string, language: string, rawFilename: string, filePathHint?: string) => {
         // Derive clean contract base name from contractFilename or rawFilename
         let baseName = getCleanContractBaseName(contractFilename);
         if (!baseName || baseName === 'contract') {
@@ -470,10 +470,41 @@ Ask a question below or click one of the quick actions to get started!`,
             baseName = getCleanContractBaseName(managedMatch[1]);
         }
 
+        // 0. If an explicit file path hint was given in the code block header
+        if (filePathHint) {
+            const cleanHint = filePathHint.replace(/\\/g, '/').trim();
+            const parts = cleanHint.split('/').filter(Boolean);
+            if (parts.length > 0) {
+                const hintName = parts.pop()!;
+                const hintFolder = parts.join('/') || '.';
+                const isTs = hintName.endsWith('.ts');
+                const isCompact = hintName.endsWith('.compact');
+                const isDoc = hintName.endsWith('.md') || hintName.endsWith('.txt');
+                const isShell = hintName.endsWith('.sh');
+                const isTest = hintName.includes('test') || hintFolder.includes('test');
+                const isExample = hintName.includes('example') || hintFolder.includes('example');
+                const isTsSdk = isTs && !isTest && !isExample;
+
+                return {
+                    folder: hintFolder,
+                    filename: hintName,
+                    typeLabel: isCompact ? 'Compact Contract' : isTest ? 'Vitest Unit Tests' : isTsSdk ? 'TypeScript SDK Client' : isExample ? 'Usage Example' : isDoc ? 'SDK Documentation' : isShell ? 'Shell Script' : 'Workspace File',
+                    icon: isCompact ? 'compact' : isTest ? 'test' : isTsSdk ? 'ts' : isExample ? 'example' : isDoc ? 'doc' : isShell ? 'sh' : 'txt',
+                    badgeColor: isCompact ? 'text-midnight-300 bg-midnight-500/20 border-midnight-500/30' : isTest ? 'text-emerald-300 bg-emerald-500/20 border-emerald-500/30' : isTsSdk ? 'text-cyan-300 bg-cyan-500/20 border-cyan-500/30' : isExample ? 'text-blue-300 bg-blue-500/20 border-blue-500/30' : isDoc ? 'text-purple-300 bg-purple-500/20 border-purple-500/30' : 'text-amber-300 bg-amber-500/20 border-amber-500/30',
+                    isCompact,
+                    isTsSdk,
+                    isExample,
+                    isTest,
+                    isDoc,
+                    isShell,
+                };
+            }
+        }
+
         const lang = (language || '').toLowerCase().trim();
         const trimmed = code.trim();
 
-        // 1. Shell / Terminal Commands (Must be checked FIRST so npm install is never treated as TypeScript)
+        // 1. Shell / Terminal Commands
         if (
             lang === 'bash' ||
             lang === 'sh' ||
@@ -538,9 +569,9 @@ Ask a question below or click one of the quick actions to get started!`,
             return {
                 folder: 'contracts',
                 filename: `${baseName}.compact`,
-                typeLabel: 'Compact Smart Contract',
+                typeLabel: 'Compact Contract',
                 icon: 'compact',
-                badgeColor: 'text-indigo-300 bg-indigo-500/20 border-indigo-500/30',
+                badgeColor: 'text-midnight-300 bg-midnight-500/20 border-midnight-500/30',
                 isCompact: true,
                 isTsSdk: false,
                 isExample: false,
@@ -571,7 +602,7 @@ Ask a question below or click one of the quick actions to get started!`,
             };
         }
 
-        // 5. API Reference Outline / Signature Only (e.g. class outline without implementation or imports)
+        // 5. API Reference Outline / Signature Only
         const isOutlineOnly =
             (trimmed.startsWith('class ') || trimmed.includes('class ')) &&
             trimmed.includes('constructor(') &&
@@ -595,28 +626,7 @@ Ask a question below or click one of the quick actions to get started!`,
             };
         }
 
-        // 6. Production TypeScript Client SDK (Full Class Adapter) - Must be checked BEFORE pure types
-        if (
-            (trimmed.includes('class ') || trimmed.includes('export class ') || trimmed.includes('constructor(')) &&
-            !trimmed.includes('describe(') &&
-            !trimmed.includes('async function main')
-        ) {
-            return {
-                folder: 'src/client',
-                filename: `${baseName}-sdk.ts`,
-                typeLabel: 'TypeScript SDK Client',
-                icon: 'ts',
-                badgeColor: 'text-cyan-300 bg-cyan-500/20 border-cyan-500/30',
-                isCompact: false,
-                isTsSdk: true,
-                isExample: false,
-                isTest: false,
-                isDoc: false,
-                isShell: false,
-            };
-        }
-
-        // 6. Usage Walkthrough / Quickstart Script (e.g. async function main(), client.storeMessage(...))
+        // 6. Usage Walkthrough / Quickstart Script
         if (
             trimmed.includes('async function main') ||
             trimmed.includes('async function run') ||
@@ -641,7 +651,28 @@ Ask a question below or click one of the quick actions to get started!`,
             };
         }
 
-        // 7. API Reference & Pure Type Signatures (Interfaces / Types only, without class)
+        // 7. Production TypeScript Client SDK (Full Class Adapter)
+        if (
+            (trimmed.includes('class ') || trimmed.includes('export class ') || trimmed.includes('constructor(')) &&
+            !trimmed.includes('describe(') &&
+            !trimmed.includes('async function main')
+        ) {
+            return {
+                folder: 'src/client',
+                filename: `${baseName}-sdk.ts`,
+                typeLabel: 'TypeScript SDK Client',
+                icon: 'ts',
+                badgeColor: 'text-cyan-300 bg-cyan-500/20 border-cyan-500/30',
+                isCompact: false,
+                isTsSdk: true,
+                isExample: false,
+                isTest: false,
+                isDoc: false,
+                isShell: false,
+            };
+        }
+
+        // 8. API Reference & Pure Type Signatures
         if (
             (trimmed.startsWith('interface ') || trimmed.startsWith('export interface ') || trimmed.startsWith('type ') || trimmed.startsWith('export type ')) ||
             trimmed.includes('interface ') ||
@@ -663,7 +694,7 @@ Ask a question below or click one of the quick actions to get started!`,
             };
         }
 
-        // 8. General TypeScript / JavaScript Module Fallback
+        // 9. General TypeScript / JavaScript Module Fallback
         if (lang === 'typescript' || lang === 'ts' || lang === 'js' || lang === 'javascript') {
             return {
                 folder: 'src/client',
@@ -680,7 +711,7 @@ Ask a question below or click one of the quick actions to get started!`,
             };
         }
 
-        // 8. Markdown / Documentation
+        // 10. Markdown / Documentation
         if (lang === 'markdown' || lang === 'md' || trimmed.startsWith('# ') || trimmed.includes('## ')) {
             return {
                 folder: 'docs',
@@ -712,8 +743,14 @@ Ask a question below or click one of the quick actions to get started!`,
         };
     };
 
-    // Save code snippet directly to workspace (with intelligent path suggestion)
-    const handleSaveSnippetToFile = async (code: string, language: string) => {
+    // Save code snippet directly to workspace (instant, reliable saving without blocking window.prompt)
+    const handleSaveSnippetToFile = async (
+        code: string,
+        language: string,
+        explicitFolder?: string,
+        explicitFilename?: string,
+        filePathHint?: string
+    ) => {
         if (isStreaming) {
             toast.error('Generation in Progress', 'Please wait for Gemini to finish generating before saving the file.');
             return;
@@ -724,29 +761,32 @@ Ask a question below or click one of the quick actions to get started!`,
             return;
         }
 
-        const meta = detectFileMeta(code, language, filename);
+        let cleanCode = code.trim();
+        // Sanitize code: remove accidental markdown fence wrappers
+        if (cleanCode.startsWith('```')) {
+            cleanCode = cleanCode.replace(/^```[^\r\n]*\r?\n/, '');
+        }
+        if (cleanCode.endsWith('```')) {
+            cleanCode = cleanCode.replace(/\r?\n```$/, '');
+        }
 
-        const targetPath = prompt(`Enter workspace path to save this file:`, `${meta.folder}/${meta.filename}`);
-        if (!targetPath) return;
-
-        const cleanPath = targetPath.trim().replace(/\\/g, '/');
-        const parts = cleanPath.split('/').filter(Boolean);
-        const saveName = parts.pop() || meta.filename;
-        const saveFolder = parts.join('/') || '.';
+        const meta = detectFileMeta(cleanCode, language, filename, filePathHint);
+        const saveFolder = explicitFolder || meta.folder;
+        const saveName = explicitFilename || meta.filename;
 
         try {
             const res = await fetch('/api/compiler/save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    sourceCode: code,
+                    sourceCode: cleanCode.trim(),
                     filename: saveName,
                     folder: saveFolder,
                 }),
             });
             const data = await res.json();
             if (data.success) {
-                toast.success('File Saved to Workspace', `Saved to ${data.data.folder}/${data.data.filename}`);
+                toast.success('File Saved', `Saved to ${data.data.folder}/${data.data.filename}`);
             } else {
                 throw new Error(data.error || 'Failed to save file');
             }
@@ -757,22 +797,28 @@ Ask a question below or click one of the quick actions to get started!`,
 
     // Save entire markdown documentation to workspace
     const handleSaveFullDocToFile = async (fullContent: string) => {
-        const baseName = getCleanContractBaseName(contractFilename || filename);
-        const defaultDocPath = CONTRACT_PATHS.doc(baseName);
-        const targetPath = prompt(`Enter workspace path to save SDK documentation:`, defaultDocPath);
-        if (!targetPath) return;
+        if (isStreaming) {
+            toast.error('Generation in Progress', 'Please wait for Gemini to finish generating before saving.');
+            return;
+        }
 
-        const cleanPath = targetPath.trim().replace(/\\/g, '/');
-        const parts = cleanPath.split('/').filter(Boolean);
-        const saveName = parts.pop() || `${baseName}-sdk.md`;
-        const saveFolder = parts.join('/') || 'docs';
+        const baseName = getCleanContractBaseName(contractFilename || filename);
+        const saveFolder = 'docs';
+        const saveName = `${baseName}-sdk.md`;
+
+        // Clean content: if the content has outer ```markdown ... ``` wrapper, strip it
+        let cleanDoc = fullContent.trim();
+        if (cleanDoc.startsWith('```markdown') || cleanDoc.startsWith('```md')) {
+            cleanDoc = cleanDoc.replace(/^```(?:markdown|md)[^\r\n]*\r?\n/, '');
+            cleanDoc = cleanDoc.replace(/\r?\n```\s*$/, '');
+        }
 
         try {
             const res = await fetch('/api/compiler/save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    sourceCode: fullContent,
+                    sourceCode: cleanDoc.trim(),
                     filename: saveName,
                     folder: saveFolder,
                 }),
@@ -802,11 +848,18 @@ Ask a question below or click one of the quick actions to get started!`,
         toast.success('File Downloaded', `Downloaded ${meta.filename}`);
     };
 
-    // Download full markdown documentation
+    // Download entire documentation
     const handleDownloadFullDoc = (fullContent: string) => {
         const baseName = getCleanContractBaseName(contractFilename || filename);
         const docName = `${baseName}-sdk.md`;
-        const blob = new Blob([fullContent], { type: 'text/markdown;charset=utf-8' });
+
+        let cleanDoc = fullContent.trim();
+        if (cleanDoc.startsWith('```markdown') || cleanDoc.startsWith('```md')) {
+            cleanDoc = cleanDoc.replace(/^```(?:markdown|md)[^\r\n]*\r?\n/, '');
+            cleanDoc = cleanDoc.replace(/\r?\n```\s*$/, '');
+        }
+
+        const blob = new Blob([cleanDoc], { type: 'text/markdown;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -818,14 +871,38 @@ Ask a question below or click one of the quick actions to get started!`,
 
     // Helper to parse markdown code blocks for extraction
     const extractCodeBlocks = (text: string) => {
-        const regex = /```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g;
-        const blocks: { language: string; code: string; fullMatch: string }[] = [];
+        // Match code blocks with any header (including ```typescript:src/client/file.ts)
+        const regex = /```([^\r\n]*)\r?\n([\s\S]*?)```/g;
+        const blocks: { language: string; code: string; fullMatch: string; filePathHint?: string }[] = [];
         let match;
         while ((match = regex.exec(text)) !== null) {
+            const rawHeader = (match[1] || '').trim();
+            let language = rawHeader.toLowerCase();
+            let filePathHint: string | undefined;
+
+            if (rawHeader.includes(':')) {
+                const parts = rawHeader.split(':');
+                language = parts[0].trim().toLowerCase();
+                filePathHint = parts.slice(1).join(':').trim();
+            } else if (rawHeader.includes(' ')) {
+                const parts = rawHeader.split(/\s+/);
+                language = parts[0].trim().toLowerCase();
+                filePathHint = parts.slice(1).join(' ').trim();
+            }
+
+            let cleanCode = match[2].trim();
+            if (cleanCode.startsWith('```')) {
+                cleanCode = cleanCode.replace(/^```[^\r\n]*\r?\n/, '');
+            }
+            if (cleanCode.endsWith('```')) {
+                cleanCode = cleanCode.replace(/\r?\n```$/, '');
+            }
+
             blocks.push({
-                language: match[1] || 'text',
-                code: match[2].trim(),
+                language: language || 'text',
+                code: cleanCode.trim(),
                 fullMatch: match[0],
+                filePathHint,
             });
         }
         return blocks;
@@ -834,10 +911,11 @@ Ask a question below or click one of the quick actions to get started!`,
     // Render formatted markdown content with interactive code blocks
     const renderMessageContent = (content: string, msgId: string, role: string = 'assistant') => {
         const blocks = extractCodeBlocks(content);
+        const baseName = getCleanContractBaseName(contractFilename || filename);
 
         // Find key deliverables by selecting the complete, production file (with imports) or largest matching block
         const tsSdkBlocks = blocks.filter((b) => {
-            const meta = detectFileMeta(b.code, b.language, filename);
+            const meta = detectFileMeta(b.code, b.language, filename, b.filePathHint);
             return meta.isTsSdk;
         });
         const tsSdkBlock =
@@ -845,12 +923,12 @@ Ask a question below or click one of the quick actions to get started!`,
             tsSdkBlocks.find((b) => b.code.includes('import ')) ||
             [...tsSdkBlocks].sort((a, b) => b.code.length - a.code.length)[0];
 
-        const exampleBlocks = blocks.filter((b) => detectFileMeta(b.code, b.language, filename).isExample);
+        const exampleBlocks = blocks.filter((b) => detectFileMeta(b.code, b.language, filename, b.filePathHint).isExample);
         const exampleBlock =
             exampleBlocks.find((b) => b.code.includes('import ')) ||
             [...exampleBlocks].sort((a, b) => b.code.length - a.code.length)[0];
 
-        const testBlocks = blocks.filter((b) => detectFileMeta(b.code, b.language, filename).isTest);
+        const testBlocks = blocks.filter((b) => detectFileMeta(b.code, b.language, filename, b.filePathHint).isTest);
         const testBlock =
             testBlocks.find((b) => b.code.includes('describe(') && b.code.includes('it(')) ||
             [...testBlocks].sort((a, b) => b.code.length - a.code.length)[0];
@@ -869,8 +947,8 @@ Ask a question below or click one of the quick actions to get started!`,
             );
         }
 
-        // Split text by code blocks
-        const parts = content.split(/```[a-zA-Z0-9_-]*\n[\s\S]*?```/g);
+        // Split text by code blocks (supports any code block header like ```typescript:src/client/foo.ts)
+        const parts = content.split(/```[^\r\n]*\r?\n[\s\S]*?```/g);
 
         return (
             <div className="space-y-3 text-xs text-slate-200 leading-relaxed">
@@ -913,7 +991,15 @@ Ask a question below or click one of the quick actions to get started!`,
                             {tsSdkBlock && (
                                 <>
                                     <button
-                                        onClick={() => handleSaveSnippetToFile(tsSdkBlock.code, tsSdkBlock.language)}
+                                        onClick={() =>
+                                            handleSaveSnippetToFile(
+                                                tsSdkBlock.code,
+                                                tsSdkBlock.language,
+                                                'src/client',
+                                                `${baseName}-sdk.ts`,
+                                                tsSdkBlock.filePathHint
+                                            )
+                                        }
                                         disabled={isStreaming}
                                         className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-cyan-600/30 text-cyan-200 hover:bg-cyan-600 hover:text-white text-[11px] font-bold border border-cyan-500/40 transition-all cursor-pointer shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                                         title="Save TypeScript client adapter to src/client/"
@@ -937,7 +1023,15 @@ Ask a question below or click one of the quick actions to get started!`,
                             {/* 3. Example Walkthrough Actions if present */}
                             {exampleBlock && (
                                 <button
-                                    onClick={() => handleSaveSnippetToFile(exampleBlock.code, exampleBlock.language)}
+                                    onClick={() =>
+                                        handleSaveSnippetToFile(
+                                            exampleBlock.code,
+                                            exampleBlock.language,
+                                            'examples',
+                                            `${baseName}-example.ts`,
+                                            exampleBlock.filePathHint
+                                        )
+                                    }
                                     disabled={isStreaming}
                                     className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-blue-600/30 text-blue-200 hover:bg-blue-600 hover:text-white text-[11px] font-bold border border-blue-500/40 transition-all cursor-pointer shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                                     title="Save runnable example script to examples/"
@@ -950,7 +1044,15 @@ Ask a question below or click one of the quick actions to get started!`,
                             {/* 4. Vitest Unit Tests Actions if present */}
                             {testBlock && (
                                 <button
-                                    onClick={() => handleSaveSnippetToFile(testBlock.code, testBlock.language)}
+                                    onClick={() =>
+                                        handleSaveSnippetToFile(
+                                            testBlock.code,
+                                            testBlock.language,
+                                            'tests/contracts',
+                                            `${baseName}.test.ts`,
+                                            testBlock.filePathHint
+                                        )
+                                    }
                                     disabled={isStreaming}
                                     className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/30 text-emerald-200 hover:bg-emerald-600 hover:text-white text-[11px] font-bold border border-emerald-500/40 transition-all cursor-pointer shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                                     title="Save unit tests to tests/contracts/"
@@ -976,7 +1078,7 @@ Ask a question below or click one of the quick actions to get started!`,
 
                 {parts.map((part, index) => {
                     const block = blocks[index];
-                    const meta = block ? detectFileMeta(block.code, block.language, filename) : null;
+                    const meta = block ? detectFileMeta(block.code, block.language, filename, block.filePathHint) : null;
 
                     return (
                         <React.Fragment key={index}>
@@ -1019,7 +1121,13 @@ Ask a question below or click one of the quick actions to get started!`,
                                             {/* Save to Workspace File */}
                                             <button
                                                 onClick={() =>
-                                                    handleSaveSnippetToFile(block.code, block.language)
+                                                    handleSaveSnippetToFile(
+                                                        block.code,
+                                                        block.language,
+                                                        meta.folder,
+                                                        meta.filename,
+                                                        block.filePathHint
+                                                    )
                                                 }
                                                 disabled={isStreaming}
                                                 className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-emerald-600/30 text-emerald-200 hover:bg-emerald-600 hover:text-white text-[10px] font-semibold border border-emerald-500/40 transition-colors cursor-pointer disabled:opacity-50"

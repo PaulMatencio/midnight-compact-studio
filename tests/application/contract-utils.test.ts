@@ -81,6 +81,16 @@ describe('parseContractConstructorParams', () => {
         expect(params[0].compactType).toBe('Bytes<32>');
     });
 
+    it('parses constructor parameters for fungible-token-v2-2 with optional salt', () => {
+        const params = parseContractConstructorParams('fungible-token-v2-2');
+        expect(params.length).toBeGreaterThan(0);
+        const saltParam = params.find((p) => p.name.includes('salt'));
+        expect(saltParam).toBeDefined();
+        expect(saltParam?.required).toBe(false);
+        expect(saltParam?.defaultValue).toBe('');
+        expect(saltParam?.type).toBe('string');
+    });
+
     it('returns empty array for unknown or non-existent contracts', () => {
         expect(parseContractConstructorParams('non-existent-contract-xyz')).toEqual([]);
     });

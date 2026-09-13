@@ -9,6 +9,7 @@ export class DeployContractUseCase {
             contractType: input.contractType,
             privateStatePassword: input.privateStatePassword,
             constructorArgs: input.constructorArgs,
+            deployerAddress: input.deployerAddress,
         });
     }
 }

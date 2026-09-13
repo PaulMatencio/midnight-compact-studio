@@ -14,41 +14,98 @@ import {
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
+interface ResolvedDeploymentInfo {
+    contractAddress: string;
+    contractSalt?: string;
+    owner?: string;
+    deployerAddress?: string;
+}
+
+function isPlaceholderAddress(addr?: string | null): boolean {
+    if (!addr) return true;
+    const trimmed = addr.trim();
+    if (trimmed.length === 0) return true;
+    if (trimmed === DEFAULT_DEPLOYMENT_CONFIG.contractAddress) return true;
+    if (trimmed === '0000000000000000000000000000000000000000000000000000000000000000') return true;
+    if (!/[1-9a-fA-F]/.test(trimmed)) return true;
+    if (trimmed.toLowerCase() === 'undefined' || trimmed.toLowerCase() === 'null') return true;
+    return false;
+}
+
 /**
- * Resolve the current deployed contract address from deployment storage
+ * Resolve the current deployed contract info from deployment storage
  * if not explicitly provided or if a dummy zero-address placeholder was passed.
  */
-async function resolveCurrentContractAddress(baseContractName: string, requestedAddress?: string): Promise<string> {
+async function resolveCurrentDeployment(baseContractName: string, requestedAddress?: string): Promise<ResolvedDeploymentInfo> {
     const defaultPlaceholder = DEFAULT_DEPLOYMENT_CONFIG.contractAddress || '0000000000000000000000000000000000000000000000000000000000000000';
-    if (requestedAddress && requestedAddress.trim().length > 0 && requestedAddress !== defaultPlaceholder) {
-        return requestedAddress.trim();
-    }
+    let match: any = null;
+
     try {
         const deployments = await container.deploymentStorage.getDeployments();
         if (deployments && deployments.length > 0) {
             const clean = baseContractName.toLowerCase();
-            // 1. Exact match on contractType
-            const exactMatch = deployments.find((d) => (d.contractType || '').toLowerCase() === clean);
-            if (exactMatch?.contractAddress) {
-                return exactMatch.contractAddress;
+            if (!isPlaceholderAddress(requestedAddress)) {
+                match = deployments.find((d) => (d.contractAddress || '').toLowerCase() === requestedAddress!.trim().toLowerCase());
             }
-            // 2. Partial match on contractType or nickname
-            const partialMatch = deployments.find((d) => {
-                const type = (d.contractType || '').toLowerCase();
-                const nick = (d.nickname || '').toLowerCase();
-                return nick.includes(clean) || clean.includes(type) || type.includes(clean);
-            });
-            if (partialMatch?.contractAddress) {
-                return partialMatch.contractAddress;
+            if (!match) {
+                // 1. Exact match on contractType
+                match = deployments.find((d) => (d.contractType || '').toLowerCase() === clean);
             }
-            if (deployments[0]?.contractAddress) {
-                return deployments[0].contractAddress;
+            if (!match) {
+                // 2. Normalized match (ignoring dashes and underscores)
+                const cleanNorm = clean.replace(/[^a-z0-9]/g, '');
+                match = deployments.find((d) => {
+                    const typeNorm = (d.contractType || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+                    return typeNorm === cleanNorm;
+                });
+            }
+            if (!match) {
+                // 3. Partial match on contractType or nickname
+                match = deployments.find((d) => {
+                    const type = (d.contractType || '').toLowerCase();
+                    const nick = (d.nickname || '').toLowerCase();
+                    return nick.includes(clean) || clean.includes(type) || type.includes(clean);
+                });
+            }
+            if (!match) {
+                match = deployments[0];
             }
         }
     } catch (err) {
         console.warn('Could not auto-resolve contract address from deployment storage:', err);
     }
-    return defaultPlaceholder;
+
+    const resolvedAddress = !isPlaceholderAddress(requestedAddress)
+        ? requestedAddress!.trim()
+        : (match?.contractAddress || defaultPlaceholder);
+
+    let contractSalt = match?.contractSalt;
+    let owner = match?.owner;
+    const deployerAddress = match?.deployerAddress;
+
+    // Fallback: If contractSalt or owner is missing in storage, query live on-chain contract state
+    if ((!contractSalt || !owner) && !isPlaceholderAddress(resolvedAddress)) {
+        try {
+            const state = await container.contractGateway.getContractState(resolvedAddress);
+            if (state?.raw) {
+                if (!contractSalt && (state.raw._contractSalt || state.raw.contractSalt)) {
+                    contractSalt = String(state.raw._contractSalt || state.raw.contractSalt);
+                }
+                if (!owner && (state.raw.owner || state.raw._owner)) {
+                    owner = String(state.raw.owner || state.raw._owner);
+                }
+            }
+        } catch (stateErr) {
+            console.warn(`Could not fetch live on-chain state for ${resolvedAddress}:`, stateErr);
+        }
+    }
+
+    return {
+        contractAddress: resolvedAddress,
+        contractSalt,
+        owner,
+        deployerAddress,
+    };
 }
 
 /**
@@ -64,6 +121,10 @@ function generateGeminiDAppPrompt(
         .split('-')
         .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
         .join('');
+
+    const saltSection = config.contractSalt ? `- **Contract Salt (hex)**: \`${config.contractSalt}\`\n` : '';
+    const ownerSection = config.owner ? `- **Owner Account (derived on-chain commitment)**: \`${config.owner}\`\n` : '';
+    const deployerSection = config.deployerAddress ? `- **Deployer Address**: \`${config.deployerAddress}\`\n` : '';
 
     return `# Midnight Network DApp Frontend Architecture Prompt: ${pascalName}
 
@@ -102,15 +163,17 @@ Scaffold and implement a complete, production-grade **React 19 / Next.js (App Ro
 
 ## 2. Network & Deployment Configuration
 Use the configuration specified in \`deployment.config.json\` or \`deployment.json\` (configured via \`infrastructure/config/midnight-config.ts\`):
-- **Contract Name**: \`${baseContractName}\`
-- **Contract Address**: \`${config.contractAddress || DEFAULT_DEPLOYMENT_CONFIG.contractAddress}\`
-- **Network ID**: \`${config.networkId || DEFAULT_DEPLOYMENT_CONFIG.networkId}\`
-- **Indexer GraphQL Endpoint**: \`${config.indexerUrl || DEFAULT_DEPLOYMENT_CONFIG.indexerUrl}\`
-- **Indexer WebSocket Endpoint**: \`${config.indexerWsUrl || DEFAULT_DEPLOYMENT_CONFIG.indexerWsUrl}\`
-- **Node RPC Endpoint**: \`${config.nodeUrl || DEFAULT_DEPLOYMENT_CONFIG.nodeUrl}\`
-- **Proof Server Endpoint**: \`${config.proofServerUrl || DEFAULT_DEPLOYMENT_CONFIG.proofServerUrl}\`
-- **Faucet Endpoint**: \`${config.faucetUrl || DEFAULT_DEPLOYMENT_CONFIG.faucetUrl}\`
-- **Block Explorer**: \`${config.explorerUrl || DEFAULT_DEPLOYMENT_CONFIG.explorerUrl}\`
+- **Contract Name**: ${baseContractName}
+- **Contract Address**: ${config.contractAddress || DEFAULT_DEPLOYMENT_CONFIG.contractAddress}
+${saltSection}${ownerSection}${deployerSection}- **Network ID**: ${config.networkId || DEFAULT_DEPLOYMENT_CONFIG.networkId}
+- **Indexer GraphQL Endpoint**: ${config.indexerUrl || DEFAULT_DEPLOYMENT_CONFIG.indexerUrl}
+- **Indexer WebSocket Endpoint**: ${config.indexerWsUrl || DEFAULT_DEPLOYMENT_CONFIG.indexerWsUrl}
+- **Node RPC Endpoint**: ${config.nodeUrl || DEFAULT_DEPLOYMENT_CONFIG.nodeUrl}
+- **Proof Server Endpoint**: ${config.proofServerUrl || DEFAULT_DEPLOYMENT_CONFIG.proofServerUrl}
+- **Faucet Endpoint**: ${config.faucetUrl || DEFAULT_DEPLOYMENT_CONFIG.faucetUrl}
+- **Block Explorer**: ${config.explorerUrl || DEFAULT_DEPLOYMENT_CONFIG.explorerUrl}
+
+> **Important Authorization Architecture (Single Secret Key Model)**: In Compact contracts with salt replay protection (v2.2), owner-authorized circuits (such as \`mint\`, \`pause\`, \`emergencyWithdraw\`) verify \`authenticate(owner)\` where \`derivedAccount = persistentHash(["fungible-token:auth", _contractSalt, sk])\`. Because the contract was deployed with \`initialOwner\` derived from the deployer's wallet address, the user's connected wallet address serves as the secret key in \`ctx.privateState.secretKey\`. **No separate ownerSecretKey is required in the browser.** The single wallet key in private state satisfies both \`authenticate(caller)\` and \`authenticate(owner)\` seamlessly.
 
 ---
 
@@ -196,21 +259,55 @@ async function collectContractArtifacts(baseContractName: string): Promise<{
         }
     } catch {}
 
-    // 4. Client SDK Adapter
-    const sdkPath = path.join(rootDir, 'src', 'client', `${baseContractName}-sdk.ts`);
+    // 4. Client SDK Adapter & Type Definitions
     try {
-        await fs.access(sdkPath);
-        artifacts.push({ zipPath: `sdk/${path.basename(sdkPath)}`, diskPath: sdkPath });
-        detectedFiles.push(`sdk/${path.basename(sdkPath)}`);
-    } catch {}
+        const clientDir = path.join(rootDir, 'src', 'client');
+        const clientFiles = await fs.readdir(clientDir);
+        const prefix = baseContractName.toLowerCase();
+        for (const file of clientFiles) {
+            const lower = file.toLowerCase();
+            if (lower.startsWith(prefix) || lower.startsWith(prefix.replace(/-/g, ''))) {
+                const diskPath = path.join(clientDir, file);
+                artifacts.push({ zipPath: `sdk/${file}`, diskPath });
+                detectedFiles.push(`sdk/${file}`);
+            }
+        }
+    } catch {
+        const sdkPath = path.join(rootDir, 'src', 'client', `${baseContractName}-sdk.ts`);
+        try {
+            await fs.access(sdkPath);
+            artifacts.push({ zipPath: `sdk/${path.basename(sdkPath)}`, diskPath: sdkPath });
+            detectedFiles.push(`sdk/${path.basename(sdkPath)}`);
+        } catch {}
+    }
 
-    // 5. Documentation
-    const docPath = path.join(rootDir, 'docs', `${baseContractName}-sdk.md`);
+    // 5. Documentation, API Interface Definitions (.d.ts), & Architecture Diagrams
     try {
-        await fs.access(docPath);
-        artifacts.push({ zipPath: `docs/${path.basename(docPath)}`, diskPath: docPath });
-        detectedFiles.push(`docs/${path.basename(docPath)}`);
-    } catch {}
+        const docsDir = path.join(rootDir, 'docs');
+        const docFiles = await fs.readdir(docsDir);
+        const prefix = baseContractName.toLowerCase();
+        for (const file of docFiles) {
+            const lower = file.toLowerCase();
+            if (lower.startsWith(prefix) || lower.startsWith(prefix.replace(/-/g, ''))) {
+                const diskPath = path.join(docsDir, file);
+                artifacts.push({ zipPath: `docs/${file}`, diskPath });
+                detectedFiles.push(`docs/${file}`);
+            }
+        }
+    } catch {
+        const docCandidates = [
+            path.join(rootDir, 'docs', `${baseContractName}-sdk.md`),
+            path.join(rootDir, 'docs', `${baseContractName}-api.d.ts`),
+            path.join(rootDir, 'docs', `${baseContractName}-architecture.txt`),
+        ];
+        for (const p of docCandidates) {
+            try {
+                await fs.access(p);
+                artifacts.push({ zipPath: `docs/${path.basename(p)}`, diskPath: p });
+                detectedFiles.push(`docs/${path.basename(p)}`);
+            } catch {}
+        }
+    }
 
     // 6. Usage Example
     const examplePath = path.join(rootDir, 'examples', `${baseContractName}-example.ts`);
@@ -255,9 +352,14 @@ export async function GET(req: NextRequest) {
 
         const queryOverride: Partial<DeploymentConfig> = {};
         const rawAddress = searchParams.get('contractAddress');
-        const resolvedAddress = await resolveCurrentContractAddress(baseContractName, rawAddress || undefined);
-        queryOverride.contractAddress = resolvedAddress;
+        const resolvedDeployment = await resolveCurrentDeployment(baseContractName, rawAddress || undefined);
+        queryOverride.contractAddress = resolvedDeployment.contractAddress;
+        if (resolvedDeployment.contractSalt) queryOverride.contractSalt = resolvedDeployment.contractSalt;
+        if (resolvedDeployment.owner) queryOverride.owner = resolvedDeployment.owner;
+        if (resolvedDeployment.deployerAddress) queryOverride.deployerAddress = resolvedDeployment.deployerAddress;
 
+        if (searchParams.get('contractSalt')) queryOverride.contractSalt = searchParams.get('contractSalt')!;
+        if (searchParams.get('owner')) queryOverride.owner = searchParams.get('owner')!;
         if (searchParams.get('networkId')) queryOverride.networkId = searchParams.get('networkId')!;
         if (searchParams.get('indexerUrl')) queryOverride.indexerUrl = searchParams.get('indexerUrl')!;
         if (searchParams.get('indexerWsUrl')) queryOverride.indexerWsUrl = searchParams.get('indexerWsUrl')!;
@@ -350,11 +452,20 @@ export async function POST(req: NextRequest) {
         const baseContractName = getCleanContractBaseName(rawContract);
 
         const deploymentConfigOverride = body.deploymentConfig || {};
-        const resolvedAddress = await resolveCurrentContractAddress(
+        const resolvedDeployment = await resolveCurrentDeployment(
             baseContractName,
             deploymentConfigOverride.contractAddress
         );
-        deploymentConfigOverride.contractAddress = resolvedAddress;
+        deploymentConfigOverride.contractAddress = resolvedDeployment.contractAddress;
+        if (resolvedDeployment.contractSalt && !deploymentConfigOverride.contractSalt) {
+            deploymentConfigOverride.contractSalt = resolvedDeployment.contractSalt;
+        }
+        if (resolvedDeployment.owner && !deploymentConfigOverride.owner) {
+            deploymentConfigOverride.owner = resolvedDeployment.owner;
+        }
+        if (resolvedDeployment.deployerAddress && !deploymentConfigOverride.deployerAddress) {
+            deploymentConfigOverride.deployerAddress = resolvedDeployment.deployerAddress;
+        }
 
         const config = generateDeploymentConfig(baseContractName, deploymentConfigOverride);
 

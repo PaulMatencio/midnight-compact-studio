@@ -8,6 +8,9 @@ export interface ContractDeploymentRecord {
     deployerSeed?: string;
     seed?: string;
     network?: string;
+    owner?: string;
+    deployerSecretKey?: string;
+    deployerAddress?: string;
 }
 
 export interface ContractMessageSnapshot {
@@ -33,10 +36,20 @@ export interface DeploymentExecutionReceipt {
     success: boolean;
     contractAddress: string;
     contractType?: string;
+    txHash?: string;
+    blockHeight?: number | null;
     dustPaid: string;
     durationMs: number;
     network: string;
     deployedAt: string;
+}
+
+export interface PreparedDeployData {
+    unsealedTxHex: string;
+    contractAddress: string;
+    contractSalt?: string;
+    contractType: string;
+    durationMs: number;
 }
 
 export interface TransferExecutionReceipt {

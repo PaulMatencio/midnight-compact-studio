@@ -217,8 +217,16 @@ Provide detailed, structured technical documentation covering:
 2. **Prerequisites & Installation**:
    - Required packages (\`@midnight-ntwrk/compact-runtime\`, etc.).
    - If providing terminal installation commands, specify that they are for \`scripts/${baseContractName}-install.sh\`.
-3. **API Reference**:
+3. **API Reference & Caller Authentication**:
    - Method signatures, parameters, return types, and circuit error codes.
+   - Dedicated guide for **Caller Authentication & Identity Derivation**:
+     - How \`authenticate(account)\` circuits verify caller identity via derived on-chain commitments.
+     - Cross-contract replay protection: explain how \`contractSalt: Bytes<32>\` isolates accounts across contracts without needing \`kernel.self()\`.
+     - Account derivation algorithm using 32-byte secret keys: \`deriveAccount(secretKey, contractSalt)\`.
+     - How to use \`getAuthenticatedCaller(secretKey, contractSalt)\` to determine the on-chain account for a secret key.
+     - How to check authorization using \`static isAuthorized(secretKey, targetAccount, contractSalt)\`.
+     - How to wire witnesses using \`static createWitnesses(secretKey)\` for circuits requiring caller authentication (e.g., \`secret_key\` witness returning \`[context.privateState, secretKey]\`).
+     - Crucial warning: When deploying or initializing the contract, initial owner or admin accounts must be initialized with the derived account commitment (\`deriveAccount(deployerSecretKey, contractSalt)\`), NOT a raw address or random hex.
 4. **Step-by-Step Quickstart & Usage Walkthrough**:
    - Provide a complete runnable TypeScript example script (intended for \`examples/${baseContractName}-example.ts\`).
    - The script MUST begin with a header comment showing how to run it:
@@ -244,10 +252,41 @@ Provide the complete, strongly-typed TypeScript SDK file (intended for \`src/cli
    \`import { Contract as ManagedContract, ledger, type Witnesses as ContractWitnesses, type Ledger as ContractLedger } from '../../contracts/managed/${baseContractName}/contract/index.js';\` (NEVER use \`./contract/index.js\`).
 3. Defines strict TypeScript interfaces for \`${pascalName}PrivateState\`, \`${pascalName}Witnesses<PS>\` (witness functions taking \`context: WitnessContext<ContractLedger, PS>\` where off-chain private state is accessed via \`context.privateState\` and returning 2-element tuples \`[PS, ReturnValue]\`), and \`${pascalName}LedgerState = ContractLedger\`.
 4. Implements a high-level, production-ready \`${pascalName}Client\` class with:
-   - \`initialState(context: ConstructorContext<PS>): ConstructorResult<PS>\` builder.
+   - \`initialState(context: ConstructorContext<PS>, ...constructorArgs: any[]): ConstructorResult<PS>\` builder.
+   - Account derivation & authentication helpers (bound to \`contractSalt\` for cross-contract replay protection):
+     - **CRITICAL: NEVER USE SHA-256 (\`createHash('sha256')\`) FOR \`deriveAccount\`!** The on-chain Compact circuit calculates a Poseidon curve hash via \`persistentHash([domainTag, _contractSalt, sk])\`. To match the circuit, the SDK MUST implement \`deriveAccount\` using \`ManagedContract._persistentHash_1\` on a dummy contract instance:
+       \`\`\`typescript
+       public static deriveAccount(secretKey: Uint8Array | string, contractSalt: string | Uint8Array = new Uint8Array(32)): Uint8Array {
+         const skBytes = ${pascalName}Client.toBytes32(secretKey);
+         const saltBytes = ${pascalName}Client.toBytes32(contractSalt);
+         const domainTag = new Uint8Array(32);
+         domainTag.set(Buffer.from('fungible-token:auth', 'utf-8'));
+
+         try {
+           const dummy = new ManagedContract({ localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)] } as any);
+           if (typeof (dummy as any)._persistentHash_1 === 'function') {
+             try { return (dummy as any)._persistentHash_1([domainTag, saltBytes, skBytes]); }
+             catch { return (dummy as any)._persistentHash_1([domainTag, { bytes: saltBytes }, skBytes]); }
+           }
+           const proto = Object.getPrototypeOf(dummy);
+           const hashMethods = Object.getOwnPropertyNames(proto).filter((k) => k.startsWith('_persistentHash'));
+           for (const m of hashMethods) {
+             try { const r = (dummy as any)[m]([domainTag, saltBytes, skBytes]); if (r instanceof Uint8Array && r.length === 32) return r; } catch {}
+             try { const r = (dummy as any)[m]([domainTag, { bytes: saltBytes }, skBytes]); if (r instanceof Uint8Array && r.length === 32) return r; } catch {}
+           }
+         } catch {}
+         throw new Error('Failed to resolve Compact persistentHash for account derivation');
+       }
+       \`\`\`
+     - \`public deriveAccount(secretKey: Uint8Array | string, contractSalt?: string | Uint8Array): Uint8Array\` instance method that delegates to \`deriveAccount(secretKey, contractSalt ?? this.defaultContractSalt)\`.
+     - \`public getAuthenticatedCaller(secretKey: Uint8Array | string, contractSalt?: string | Uint8Array): Uint8Array\` returning the caller's derived on-chain account.
+     - \`public static isAuthorized(secretKey: Uint8Array | string, targetAccount: Uint8Array | string, contractSalt: string | Uint8Array): boolean\` to verify if a secret key matches a target on-chain account.
+     - \`public static createWitnesses<PS extends ${pascalName}PrivateState = ${pascalName}PrivateState>(secretKey: Uint8Array | string): Witnesses<PS>\` returning default witnesses configured with the caller's secret key (supplying \`[context.privateState, context.privateState?.secretKey ?? skBytes]\` for authentication witnesses).
    - Type-safe circuit execution methods managing circuit contexts. (NOTE: Circuits with no return value in Compact return \`CircuitResults<PS, []>\` with the unit empty tuple \`[]\`, NOT \`void\`).
    - Strongly-typed ledger state query helper: \`queryLedgerStateFromRaw(rawState: StateValue | ChargedState | unknown): ${pascalName}LedgerState { return ledger(rawState as StateValue | ChargedState); }\`.
    - Comprehensive TSDoc inline comments.
+5. Exports both the class and SDK alias:
+   \`export { ${pascalName}Client as ${pascalName}SDK };\`
 `;
         } else if (action === 'generate_tests') {
             const cleanContractName = getCleanContractBaseName(filename);
@@ -340,23 +379,40 @@ MANDATORY MIDNIGHT-CQ TEST GENERATION RULES (CRITICAL - DO NOT VIOLATE):
      In Compact contracts with multiple persistent hashes (e.g. \`persistentHash<[Bytes<32>, ContractAddress]>\` for contract account and \`persistentHash<[Bytes<32>, ContractAddress, Bytes<32>]>\` for user authentication), the compiler generates multiple methods (\`_persistentHash_0\`, \`_persistentHash_1\`, etc.).
      NEVER hardcode \`_persistentHash_0\`! Instead, dynamically find the method where altering \`sk\` produces distinct outputs:
      \`\`\`typescript
-     const dummyAddressBytes = Uint8Array.from(Buffer.from(dummyContractAddress, 'hex'));
+     In Compact contracts with multiple persistent hashes (e.g. \`persistentHash<[Bytes<32>, ContractAddress]>\` for contract account and \`persistentHash<[Bytes<32>, Bytes<32>, Bytes<32>]>\` for user authentication), the compiler generates multiple methods (\`_persistentHash_0\`, \`_persistentHash_1\`, etc.).
+     NEVER hardcode \`_persistentHash_0\`! Instead, dynamically find the method where altering \`sk\` produces distinct outputs (testing both plain \`salt\` and \`{ bytes: salt }\` for full compatibility):
+     \`\`\`typescript
+     const dummySalt = new Uint8Array(32).fill(7);
      const helperContract = new Contract({ localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)] });
-
      const proto = Object.getPrototypeOf(helperContract);
      const hashMethods = Object.getOwnPropertyNames(proto).filter((k) => k.startsWith('_persistentHash'));
-     const accountHashMethod = hashMethods.find((method) => {
-       try {
-         const t1 = (helperContract as any)[method]([domainTagAuth, { bytes: dummyAddressBytes }, createKey(1)]);
-         const t2 = (helperContract as any)[method]([domainTagAuth, { bytes: dummyAddressBytes }, createKey(2)]);
-         return t1 instanceof Uint8Array && t2 instanceof Uint8Array && Buffer.from(t1).compare(Buffer.from(t2)) !== 0;
-       } catch {
-         return false;
-       }
-     }) || '_persistentHash_0';
+     let accountHashMethod = '_persistentHash_1';
+     let passWrappedObject = false;
 
-     const deriveAccount = (sk: Uint8Array): Uint8Array => {
-       return (helperContract as any)[accountHashMethod]([domainTagAuth, { bytes: dummyAddressBytes }, sk]);
+     for (const method of hashMethods) {
+       try {
+         const t1 = (helperContract as any)[method]([domainTagAuth, dummySalt, createKey(1)]);
+         const t2 = (helperContract as any)[method]([domainTagAuth, dummySalt, createKey(2)]);
+         if (t1 instanceof Uint8Array && t2 instanceof Uint8Array && Buffer.from(t1).compare(Buffer.from(t2)) !== 0) {
+           accountHashMethod = method;
+           passWrappedObject = false;
+           break;
+         }
+       } catch {}
+       try {
+         const t1 = (helperContract as any)[method]([domainTagAuth, { bytes: dummySalt }, createKey(1)]);
+         const t2 = (helperContract as any)[method]([domainTagAuth, { bytes: dummySalt }, createKey(2)]);
+         if (t1 instanceof Uint8Array && t2 instanceof Uint8Array && Buffer.from(t1).compare(Buffer.from(t2)) !== 0) {
+           accountHashMethod = method;
+           passWrappedObject = true;
+           break;
+         }
+       } catch {}
+     }
+
+     const deriveAccount = (sk: Uint8Array, salt: Uint8Array = CONTRACT_SALT): Uint8Array => {
+       const saltArg = passWrappedObject ? { bytes: salt } : salt;
+       return (helperContract as any)[accountHashMethod]([domainTagAuth, saltArg, sk]);
      };
      \`\`\`
    - NEVER use a fallback that returns raw \`sk\` (\`return sk;\`). Raw secret keys will cause \`authenticate()\` assertions to fail with \`caller authorization failed\`.
@@ -370,6 +426,48 @@ MANDATORY MIDNIGHT-CQ TEST GENERATION RULES (CRITICAL - DO NOT VIOLATE):
      const isZeroKey = (key: Uint8Array): boolean => key.every((b) => b === 0);
      const zeroKey = (): Uint8Array => new Uint8Array(32).fill(0);
      \`\`\`
+
+9. **PUBLIC LEDGER STATE vs EXPORTED CIRCUITS (CRITICAL - NO GETTER CIRCUITS)**:
+   - In Compact contracts, public ledger variables (such as \`export ledger _balances: Map<...>\`, \`export ledger _allowances: Map<...>\`, \`export ledger _totalSupply: Uint<128>\`, \`export ledger _maxSupply: Uint<128>\`, \`export ledger _name: Opaque<"string">\`, \`export ledger _symbol: Opaque<"string">\`, \`export ledger _decimals: Uint<8>\`, \`export ledger _paused: Boolean\`, \`export ledger _contractSalt: Bytes<32>\`, etc.) are directly queried from the public ledger state using \`ledger(circuitContext.currentQueryContext.state)\`!
+   - ABSOLUTELY NEVER generate tests or assertions that invoke:
+     - \`contract.circuits.balanceOf\` -> USE \`getBalance(account)\` INSTEAD.
+     - \`contract.circuits.allowance\` -> USE \`getAllowance(owner, spender)\` INSTEAD.
+     - \`contract.circuits.totalSupply\` -> USE \`getLedger()._totalSupply\` INSTEAD.
+     - \`contract.circuits.maxSupply\` -> USE \`getLedger()._maxSupply\` INSTEAD.
+     - \`contract.circuits.paused\` -> USE \`getLedger()._paused\` INSTEAD.
+     - \`contract.circuits.name\` -> USE \`getLedger()._name\` INSTEAD.
+     - \`contract.circuits.symbol\` -> USE \`getLedger()._symbol\` INSTEAD.
+     - \`contract.circuits.decimals\` -> USE \`getLedger()._decimals\` INSTEAD.
+     - \`contract.circuits.contractSalt\` -> USE \`getLedger()._contractSalt\` INSTEAD.
+   - DO NOT create any test block named "exposes getter circuits" or try to invoke getter circuits. These circuits DO NOT EXIST on \`contract.circuits\` and calling them causes \`TypeError: circuitFn is not a function\`.
+   - Always query the ledger state directly:
+     \`\`\`typescript
+     const getLedger = () => ledger(circuitContext.currentQueryContext.state);
+     const getBalance = (account: Uint8Array): bigint => {
+       const l = getLedger();
+       return l._balances.member(account) ? l._balances.lookup(account) : 0n;
+     };
+     const getAllowance = (owner: Uint8Array, spender: Uint8Array): bigint => {
+       const l = getLedger();
+       const key: [Uint8Array, Uint8Array] = [owner, spender];
+       return l._allowances.member(key) ? l._allowances.lookup(key) : 0n;
+     };
+     expect(getLedger()._name).toBe(TOKEN_NAME);
+     expect(getLedger()._totalSupply).toBe(0n);
+     expect(getLedger()._paused).toBe(false);
+     \`\`\`
+
+10. **CONSTRUCTOR & INITIAL STATE ARGUMENTS**:
+    - Inspect the \`constructor(...)\` declaration in the \`.compact\` file or \`initialState(...)\` in the generated \`.d.ts\`.
+    - If the constructor signature has \`salt_: Bytes<32>\` (e.g. \`constructor(salt_: Bytes<32>, initialOwner: Bytes<32>, ...)\`), you MUST pass \`CONTRACT_SALT\` as the first argument after \`constructorCtx\`:
+      \`contract.initialState(constructorCtx, CONTRACT_SALT, initialOwner, ...);\`
+    - Omitting constructor parameters results in \`CompactError: Contract state constructor: expected N arguments, received M\`.
+
+11. **COMPACT STRUCTS & CONTRACTADDRESS TYPES (CRITICAL)**:
+    - Any Compact parameter of type \`ContractAddress\` is represented in TypeScript as a struct \`{ bytes: Uint8Array }\` (length 32).
+    - NEVER pass a raw string or hex string (e.g. \`'02'.repeat(32)\`) to a circuit expecting a \`ContractAddress\`! Passing a string results in a Compact runtime type error: \`expected value of type struct ContractAddress<bytes: Bytes<32>> but received '<hex string>'\`.
+    - Always pass \`{ bytes: new Uint8Array(32).fill(2) }\` or \`{ bytes: Uint8Array.from(Buffer.from(addressHex, 'hex')) }\`.
+    - Note on \`pause\` vs \`paused\`: In contracts with emergency stop, the circuits are \`contract.circuits.pause(caller)\` and \`contract.circuits.unpause(caller)\`. There is NO circuit named \`contract.circuits.paused\`! Always verify the paused state by checking the public ledger field: \`expect(getLedger()._paused).toBe(true)\` or \`expect(getLedger()._paused).toBe(false)\`.
 
 Please generate the complete, runnable Vitest test file (\`tests/contracts/${cleanContractName}.test.ts\`) inside a \`\`\`typescript ... \`\`\` code block.
 `;

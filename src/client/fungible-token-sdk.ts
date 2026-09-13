@@ -68,6 +68,74 @@ export class FungibleTokenClient<PS extends FungibleTokenPrivateState = Fungible
   }
 
   /**
+   * Derives a deterministic 32-byte on-chain account commitment for a prover secret key.
+   */
+  public deriveAccount(secretKey: Uint8Array, contractAddress: string | Uint8Array = new Uint8Array(32)): Uint8Array {
+    return FungibleTokenClient.deriveAccount(secretKey, contractAddress);
+  }
+
+  /**
+   * Static helper to derive a deterministic 32-byte on-chain account commitment.
+   */
+  public static deriveAccount(secretKey: Uint8Array, contractAddress: string | Uint8Array = new Uint8Array(32)): Uint8Array {
+    const domainTag = new Uint8Array(32);
+    domainTag.set(Buffer.from('fungible-token:auth', 'utf-8'));
+
+    let addrBytes: Uint8Array;
+    if (typeof contractAddress === 'string') {
+      const cleanHex = contractAddress.startsWith('0x') ? contractAddress.slice(2) : contractAddress;
+      addrBytes = new Uint8Array(Buffer.from(cleanHex.padEnd(64, '0').slice(0, 64), 'hex'));
+    } else {
+      addrBytes = contractAddress;
+    }
+
+    const dummyContract = new ManagedContract({
+      localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)],
+    } as any);
+
+    if (typeof (dummyContract as any)._persistentHash_1 === 'function') {
+      try {
+        return (dummyContract as any)._persistentHash_1([domainTag, addrBytes, secretKey]);
+      } catch {
+        return (dummyContract as any)._persistentHash_1([domainTag, { bytes: addrBytes }, secretKey]);
+      }
+    }
+
+    const proto = Object.getPrototypeOf(dummyContract);
+    const hashMethods = Object.getOwnPropertyNames(proto).filter((k) => k.startsWith('_persistentHash'));
+    for (const method of hashMethods) {
+      try {
+        const res = (dummyContract as any)[method]([domainTag, addrBytes, secretKey]);
+        if (res instanceof Uint8Array && res.length === 32) {
+          return res;
+        }
+      } catch {}
+      try {
+        const res = (dummyContract as any)[method]([domainTag, { bytes: addrBytes }, secretKey]);
+        if (res instanceof Uint8Array && res.length === 32) {
+          return res;
+        }
+      } catch {}
+    }
+
+    throw new Error('Failed to find matching persistentHash method for account derivation');
+  }
+
+  /**
+   * Helper factory creating a ready-to-use FungibleTokenWitnesses instance.
+   */
+  public static createWitnesses<PS extends FungibleTokenPrivateState = FungibleTokenPrivateState>(
+    secretKey: Uint8Array
+  ): FungibleTokenWitnesses<PS> {
+    return {
+      localSecretKey: (context) => [
+        { ...(context.privateState as any), secretKey },
+        secretKey,
+      ],
+    };
+  }
+
+  /**
    * Generates the initial contract and runtime states for deployment.
    *
    * @param context Constructor context containing initial private state and coin public key.

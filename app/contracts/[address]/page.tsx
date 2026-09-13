@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { useWallet } from '@/src/presentation/context/WalletContext';
 import { useTransactions } from '@/src/presentation/context/TransactionContext';
+import { formatDustFee } from '@/src/lib/dust-utils';
 import { useToast } from '@/src/presentation/context/ToastContext';
 import { CONTRACT_BLUEPRINTS, getContractBlueprint } from '@/src/infrastructure/contracts/contract-registry';
 import { Breadcrumbs } from '@/components/Breadcrumbs';
@@ -644,7 +645,7 @@ export default function ContractWorkbenchPage({
                                             </span>
                                             <span className="text-amber-200 block text-[12px] font-bold mt-0.5">
                                                 {receipt.dustPaid && receipt.dustPaid !== '0'
-                                                    ? `${BigInt(receipt.dustPaid).toLocaleString()} DUST`
+                                                    ? formatDustFee(receipt.dustPaid)
                                                     : 'Covered via DUST UTXO'}
                                             </span>
                                         </div>

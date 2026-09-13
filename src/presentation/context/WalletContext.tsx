@@ -42,6 +42,8 @@ interface WalletContextType {
     isExtensionConnected: boolean;
     extensionAddress: string;
     extensionShieldedAddress: string;
+    extensionShieldedCoinPublicKey: string;
+    extensionShieldedEncryptionPublicKey: string;
     extensionNetworkId: string;
     extensionApi: MidnightConnectedApi | null;
     targetNetwork: string;
@@ -54,6 +56,7 @@ interface WalletContextType {
     setSeed: (seed: string) => void;
     defaultSeed: string;
     walletStatus: WalletStatus | null;
+    backendWalletStatus: WalletStatus | null;
     isLoadingWallet: boolean;
     isRegisteringDust: boolean;
     fetchWalletStatus: (overrideSeed?: string) => Promise<void>;
@@ -79,6 +82,8 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const [isExtensionConnected, setIsExtensionConnected] = useState<boolean>(false);
     const [extensionAddress, setExtensionAddress] = useState<string>('');
     const [extensionShieldedAddress, setExtensionShieldedAddress] = useState<string>('');
+    const [extensionShieldedCoinPublicKey, setExtensionShieldedCoinPublicKey] = useState<string>('');
+    const [extensionShieldedEncryptionPublicKey, setExtensionShieldedEncryptionPublicKey] = useState<string>('');
     const [extensionNetworkId, setExtensionNetworkId] = useState<string>('preprod');
     const [targetNetwork, setTargetNetworkState] = useState<string>(() => {
         if (typeof window !== 'undefined') {
@@ -152,6 +157,8 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             setExtensionApi(res.api);
             setExtensionAddress(res.address);
             setExtensionShieldedAddress(res.shieldedAddress || '');
+            setExtensionShieldedCoinPublicKey(res.shieldedCoinPublicKey || '');
+            setExtensionShieldedEncryptionPublicKey(res.shieldedEncryptionPublicKey || '');
             setExtensionNetworkId(res.networkId || cleanNet);
             setIsExtensionConnected(true);
             setIsExtensionInstalled(true);
@@ -166,6 +173,8 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             const extStatus: WalletStatus = {
                 unshieldedAddress: res.address,
                 shieldedAddress: res.shieldedAddress,
+                coinPublicKey: res.shieldedCoinPublicKey,
+                encryptionPublicKey: res.shieldedEncryptionPublicKey,
                 tNightBalance: res.balances.tNightBalance,
                 tNightDisplay: res.balances.tNightDisplay,
                 dustBalance: res.balances.dustBalance,
@@ -200,6 +209,8 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setExtensionApi(null);
         setExtensionAddress('');
         setExtensionShieldedAddress('');
+        setExtensionShieldedCoinPublicKey('');
+        setExtensionShieldedEncryptionPublicKey('');
         setIsExtensionConnected(false);
         setExtensionWalletStatus(null);
         setConnectionMode('seed');
@@ -293,13 +304,14 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             } catch (err) {
                 console.warn('[Midnight Lace] Failed to refresh extension balances:', err);
             }
+        }
+
+        // Fetch backend deployer seed status
+        const targetSeed = overrideSeed || seed || fallbackSeed;
+        if (!targetSeed || isFetchingRef.current) {
             setIsLoadingWallet(false);
             return;
         }
-
-        // Otherwise fetch headless seed status
-        const targetSeed = overrideSeed || seed;
-        if (!targetSeed || isFetchingRef.current) return;
 
         isFetchingRef.current = true;
         const controller = new AbortController();
@@ -391,6 +403,8 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 isExtensionConnected,
                 extensionAddress,
                 extensionShieldedAddress,
+                extensionShieldedCoinPublicKey,
+                extensionShieldedEncryptionPublicKey,
                 extensionNetworkId,
                 targetNetwork,
                 setTargetNetwork,
@@ -403,6 +417,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 setSeed: handleSetSeed,
                 defaultSeed,
                 walletStatus,
+                backendWalletStatus: seedWalletStatus,
                 isLoadingWallet,
                 isRegisteringDust,
                 fetchWalletStatus,

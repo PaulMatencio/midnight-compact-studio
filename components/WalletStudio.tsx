@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useWallet } from '@/src/presentation/context/WalletContext';
 import { useToast } from '@/src/presentation/context/ToastContext';
+import { formatDustFee } from '@/src/lib/dust-utils';
 
 interface WalletStudioProps {
   seed: string;
@@ -1154,10 +1155,7 @@ export const WalletStudio: React.FC<WalletStudioProps> = ({
                             <span>DUST Gas Paid</span>
                           </span>
                           <span className="text-base font-bold text-amber-300 font-mono">
-                            {sendReceipt.dustPaid && sendReceipt.dustPaid !== '0'
-                              ? Number(sendReceipt.dustPaid).toLocaleString()
-                              : '< 1'}{' '}
-                            <span className="text-xs text-amber-400 font-semibold">DUST</span>
+                            {formatDustFee(sendReceipt.dustPaid)}
                           </span>
                         </div>
                       </div>

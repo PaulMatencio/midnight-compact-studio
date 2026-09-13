@@ -47,4 +47,7 @@ export interface DeployedContractRecord {
     network?: string;
     deployedAt: string;
     owner?: string;
+    contractSalt?: string;
+    deployerSecretKey?: string;
+    deployerAddress?: string;
 }

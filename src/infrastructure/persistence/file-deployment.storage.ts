@@ -36,6 +36,8 @@ export class FileDeploymentStorage implements IDeploymentStorage {
                 network: item.network || 'preprod',
                 deployedAt: item.deployedAt || new Date().toISOString(),
                 owner: item.owner,
+                contractSalt: item.contractSalt,
+                deployerAddress: item.deployerAddress,
             }));
         }
 
@@ -50,6 +52,8 @@ export class FileDeploymentStorage implements IDeploymentStorage {
                     network: raw.network || 'preprod',
                     deployedAt: raw.deployedAt || new Date().toISOString(),
                     owner: raw.owner,
+                    contractSalt: raw.contractSalt,
+                    deployerAddress: raw.deployerAddress,
                 },
             ];
         }
@@ -81,6 +85,8 @@ export class FileDeploymentStorage implements IDeploymentStorage {
                 network: record.network || 'preprod',
                 deployedAt: record.deployedAt || new Date().toISOString(),
                 owner: (record as any).owner,
+                contractSalt: (record as any).contractSalt,
+                deployerAddress: (record as any).deployerAddress,
             };
 
             const filtered = deployments.filter((d) => d.contractAddress.toLowerCase() !== normalized.contractAddress.toLowerCase());

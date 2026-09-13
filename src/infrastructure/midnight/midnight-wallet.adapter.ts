@@ -143,27 +143,32 @@ export class MidnightWalletAdapter implements IWalletGateway {
 
         await wallet.start(shieldedSecretKeys, dustSecretKey);
 
-        // Periodically / on synchronization checkpoints, serialize and save wallet state to disk
+        // Periodically serialize and save wallet state to disk (throttled to at most once every 60s)
         let lastPersistTime = 0;
+        let isSaving = false;
         wallet.state().pipe(
-            Rx.filter((s: any) => Boolean(s?.shielded && s?.dust)),
-        ).subscribe((s: any) => {
+            Rx.filter((s: any) => Boolean(s?.isSynced && s?.shielded && s?.dust)),
+        ).subscribe(async (s: any) => {
             const now = Date.now();
-            if (s.isSynced || now - lastPersistTime > 15000) {
-                lastPersistTime = now;
-                try {
-                    const serializedShielded = typeof s.shielded?.serialize === 'function' ? s.shielded.serialize() : undefined;
-                    const serializedDust = typeof s.dust?.serialize === 'function' ? s.dust.serialize() : undefined;
-                    if (serializedShielded || serializedDust) {
-                        this.walletStateStorage.saveState(bech32Address, {
-                            shielded: serializedShielded,
-                            dust: serializedDust,
-                            updatedAt: new Date().toISOString(),
-                        }).catch(() => {});
-                    }
-                } catch {
-                    // Ignore transient serialization errors while syncing
+            if (now - lastPersistTime < 60000 || isSaving) {
+                return;
+            }
+            lastPersistTime = now;
+            isSaving = true;
+            try {
+                const serializedShielded = typeof s.shielded?.serialize === 'function' ? s.shielded.serialize() : undefined;
+                const serializedDust = typeof s.dust?.serialize === 'function' ? s.dust.serialize() : undefined;
+                if (serializedShielded || serializedDust) {
+                    await this.walletStateStorage.saveState(bech32Address, {
+                        shielded: serializedShielded,
+                        dust: serializedDust,
+                        updatedAt: new Date().toISOString(),
+                    });
                 }
+            } catch (err) {
+                console.warn('[WalletAdapter] Transient error saving serialized wallet state:', err);
+            } finally {
+                isSaving = false;
             }
         });
 

@@ -2,75 +2,95 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import * as CompactRuntime from '@midnight-ntwrk/compact-runtime';
 import { Contract, ledger, type Witnesses } from '../../contracts/managed/fungible-token-v2-2/contract/index.js';
 
+// ============================================================================
+// Types & Constants
+// ============================================================================
+
 type PrivateState = {
   readonly currentSecretKey: Uint8Array;
 };
 
-describe('FungibleTokenV2_2 Contract Tests', () => {
-  const dummyContractAddress = '00'.repeat(32);
-  const dummyCoinPublicKey = '01'.repeat(32);
-  const dummyAddressBytes = Uint8Array.from(Buffer.from(dummyContractAddress, 'hex'));
+const MAX_UINT128 = 340282366920938463463374607431768211455n;
+const TOKEN_NAME = 'Midnight Fungible Token';
+const TOKEN_SYMBOL = 'MFT';
+const TOKEN_DECIMALS = 8n;
+const DEFAULT_MAX_SUPPLY = 1_000_000_000n;
 
-  const pad32 = (str: string): Uint8Array => {
-    const res = new Uint8Array(32);
-    const buf = Buffer.from(str, 'utf8');
-    res.set(buf.subarray(0, 32));
-    return res;
-  };
+const dummyContractAddress = '00'.repeat(32);
+const dummyCoinPublicKey = '01'.repeat(32);
 
-  const createKey = (b: number): Uint8Array => new Uint8Array(32).fill(b);
-  const zeroKey = (): Uint8Array => new Uint8Array(32).fill(0);
+const createKey = (byteValue: number): Uint8Array => new Uint8Array(32).fill(byteValue);
+const pad32 = (str: string): Uint8Array => {
+  const buf = new Uint8Array(32);
+  const enc = new TextEncoder().encode(str);
+  buf.set(enc.subarray(0, 32));
+  return buf;
+};
 
-  const domainTagAuth = pad32('fungible-token:auth');
+const domainTagAuth = pad32('fungible-token:auth');
+const CONTRACT_SALT = createKey(99);
+const ZERO_KEY = new Uint8Array(32).fill(0);
 
-  // Secret keys for distinct test actors
-  const OWNER_SK = createKey(1);
-  const ALICE_SK = createKey(2);
-  const BOB_SK = createKey(3);
-  const CHARLIE_SK = createKey(4);
-  const PAUSER_SK = createKey(5);
-  const UNAUTHORIZED_SK = createKey(99);
+const OWNER_SK = createKey(1);
+const ALICE_SK = createKey(2);
+const BOB_SK = createKey(3);
+const PAUSER_SK = createKey(4);
+const UNAUTHORIZED_SK = createKey(5);
 
-  // Helper contract to dynamically locate and bind persistentHash for account derivation
-  const helperContract = new Contract({
-    localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)],
-  });
+// ============================================================================
+// Dynamic Persistent Hash Resolution for Account Derivation
+// ============================================================================
 
-  const proto = Object.getPrototypeOf(helperContract);
-  const hashMethods = Object.getOwnPropertyNames(proto).filter((k) => k.startsWith('_persistentHash'));
-  const accountHashMethod =
-    hashMethods.find((method) => {
-      try {
-        const t1 = (helperContract as any)[method]([domainTagAuth, { bytes: dummyAddressBytes }, createKey(1)]);
-        const t2 = (helperContract as any)[method]([domainTagAuth, { bytes: dummyAddressBytes }, createKey(2)]);
-        return t1 instanceof Uint8Array && t2 instanceof Uint8Array && Buffer.from(t1).compare(Buffer.from(t2)) !== 0;
-      } catch {
-        return false;
-      }
-    }) || '_persistentHash_0';
+const dummySalt = new Uint8Array(32).fill(7);
+const helperContract = new Contract({
+  localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)],
+});
+const proto = Object.getPrototypeOf(helperContract);
+const hashMethods = Object.getOwnPropertyNames(proto).filter((k) => k.startsWith('_persistentHash'));
+let accountHashMethod = '_persistentHash_1';
+let passWrappedObject = false;
 
-  const deriveAccount = (sk: Uint8Array): Uint8Array => {
-    return (helperContract as any)[accountHashMethod]([domainTagAuth, { bytes: dummyAddressBytes }, sk]);
-  };
+for (const method of hashMethods) {
+  try {
+    const t1 = (helperContract as any)[method]([domainTagAuth, dummySalt, createKey(1)]);
+    const t2 = (helperContract as any)[method]([domainTagAuth, dummySalt, createKey(2)]);
+    if (t1 instanceof Uint8Array && t2 instanceof Uint8Array && Buffer.from(t1).compare(Buffer.from(t2)) !== 0) {
+      accountHashMethod = method;
+      passWrappedObject = false;
+      break;
+    }
+  } catch {}
+  try {
+    const t1 = (helperContract as any)[method]([domainTagAuth, { bytes: dummySalt }, createKey(1)]);
+    const t2 = (helperContract as any)[method]([domainTagAuth, { bytes: dummySalt }, createKey(2)]);
+    if (t1 instanceof Uint8Array && t2 instanceof Uint8Array && Buffer.from(t1).compare(Buffer.from(t2)) !== 0) {
+      accountHashMethod = method;
+      passWrappedObject = true;
+      break;
+    }
+  } catch {}
+}
 
-  // Precomputed derived accounts
-  const ownerAccount = deriveAccount(OWNER_SK);
-  const aliceAccount = deriveAccount(ALICE_SK);
-  const bobAccount = deriveAccount(BOB_SK);
-  const charlieAccount = deriveAccount(CHARLIE_SK);
-  const pauserAccount = deriveAccount(PAUSER_SK);
-  const unauthorizedAccount = deriveAccount(UNAUTHORIZED_SK);
+const deriveAccount = (sk: Uint8Array, salt: Uint8Array = CONTRACT_SALT): Uint8Array => {
+  const saltArg = passWrappedObject ? { bytes: salt } : salt;
+  return (helperContract as any)[accountHashMethod]([domainTagAuth, saltArg, sk]);
+};
 
-  const MAX_UINT128 = 340282366920938463463374607431768211455n;
-  const INITIAL_MAX_SUPPLY = 1_000_000n;
-  const TOKEN_NAME = 'Midnight Token';
-  const TOKEN_SYMBOL = 'MDT';
-  const TOKEN_DECIMALS = 18n;
+const OWNER_ACCOUNT = deriveAccount(OWNER_SK);
+const ALICE_ACCOUNT = deriveAccount(ALICE_SK);
+const BOB_ACCOUNT = deriveAccount(BOB_SK);
+const PAUSER_ACCOUNT = deriveAccount(PAUSER_SK);
+const UNAUTHORIZED_ACCOUNT = deriveAccount(UNAUTHORIZED_SK);
 
-  let currentCallerSecretKey: Uint8Array;
-  let privateState: PrivateState;
+// ============================================================================
+// Test Suite
+// ============================================================================
+
+describe('fungible-token-v2-2 Contract Test Suite', () => {
   let contract: Contract<PrivateState>;
   let circuitContext: any;
+  let currentCallerSecretKey: Uint8Array;
+  let privateState: PrivateState;
 
   const setCallerSecretKey = (sk: Uint8Array) => {
     currentCallerSecretKey = sk;
@@ -87,6 +107,36 @@ describe('FungibleTokenV2_2 Contract Tests', () => {
     ],
   };
 
+  const initContract = (
+    salt: Uint8Array = CONTRACT_SALT,
+    initialOwner: Uint8Array = OWNER_ACCOUNT,
+    name: string = TOKEN_NAME,
+    symbol: string = TOKEN_SYMBOL,
+    decimals: bigint = TOKEN_DECIMALS,
+    maxSupply: bigint = DEFAULT_MAX_SUPPLY,
+  ) => {
+    contract = new Contract(witnesses);
+    setCallerSecretKey(OWNER_SK);
+
+    const constructorCtx = CompactRuntime.createConstructorContext(privateState, dummyCoinPublicKey);
+    const { currentContractState } = contract.initialState(
+      constructorCtx,
+      salt,
+      initialOwner,
+      name,
+      symbol,
+      decimals,
+      maxSupply,
+    );
+
+    circuitContext = CompactRuntime.createCircuitContext(
+      dummyContractAddress,
+      dummyCoinPublicKey,
+      currentContractState.data,
+      privateState,
+    );
+  };
+
   const runCircuit = (circuitFn: (...args: any[]) => any, ...args: any[]) => {
     if (circuitContext) {
       circuitContext.currentPrivateState = privateState;
@@ -97,401 +147,396 @@ describe('FungibleTokenV2_2 Contract Tests', () => {
       dummyContractAddress,
       dummyCoinPublicKey,
       result.context.currentQueryContext.state,
-      privateState
+      privateState,
     );
     return result.result;
   };
 
   const getLedger = () => ledger(circuitContext.currentQueryContext.state);
 
-  const deployContract = (maxSupply: bigint = INITIAL_MAX_SUPPLY) => {
-    currentCallerSecretKey = OWNER_SK;
-    privateState = { currentSecretKey: OWNER_SK };
-    contract = new Contract(witnesses);
+  const getBalance = (account: Uint8Array): bigint => {
+    const l = getLedger();
+    return l._balances.member(account) ? l._balances.lookup(account) : 0n;
+  };
 
-    const constructorCtx = CompactRuntime.createConstructorContext(privateState, dummyCoinPublicKey);
-    const { currentContractState } = contract.initialState(
-      constructorCtx,
-      ownerAccount,
-      TOKEN_NAME,
-      TOKEN_SYMBOL,
-      TOKEN_DECIMALS,
-      maxSupply
-    );
-
-    circuitContext = CompactRuntime.createCircuitContext(
-      dummyContractAddress,
-      dummyCoinPublicKey,
-      currentContractState.data,
-      privateState
-    );
+  const getAllowance = (owner: Uint8Array, spender: Uint8Array): bigint => {
+    const l = getLedger();
+    const key: [Uint8Array, Uint8Array] = [owner, spender];
+    return l._allowances.member(key) ? l._allowances.lookup(key) : 0n;
   };
 
   beforeEach(() => {
-    deployContract();
+    initContract();
   });
 
-  describe('Contract Initialization & Metadata', () => {
-    it('initializes token metadata correctly', () => {
-      expect(runCircuit(contract.circuits.name)).toBe(TOKEN_NAME);
-      expect(runCircuit(contract.circuits.symbol)).toBe(TOKEN_SYMBOL);
-      expect(runCircuit(contract.circuits.decimals)).toBe(TOKEN_DECIMALS);
-      expect(runCircuit(contract.circuits.maxSupply)).toBe(INITIAL_MAX_SUPPLY);
-      expect(runCircuit(contract.circuits.totalSupply)).toBe(0n);
-      expect(runCircuit(contract.circuits.paused)).toBe(false);
+  // ==========================================================================
+  // Initialization Tests
+  // ==========================================================================
+
+  describe('Contract Initialization', () => {
+    it('should initialize contract state correctly with custom parameters', () => {
+      const state = getLedger();
+      expect(state._name).toBe(TOKEN_NAME);
+      expect(state._symbol).toBe(TOKEN_SYMBOL);
+      expect(state._decimals).toBe(TOKEN_DECIMALS);
+      expect(state._maxSupply).toBe(DEFAULT_MAX_SUPPLY);
+      expect(state._totalSupply).toBe(0n);
+      expect(state._paused).toBe(false);
+      expect(state.owner).toEqual(OWNER_ACCOUNT);
+      expect(state._emergencyPauser).toEqual(OWNER_ACCOUNT);
+      expect(state._contractSalt).toEqual(CONTRACT_SALT);
     });
 
-    it('sets default maxSupply to MAX_UINT128 when initialized with 0', () => {
-      deployContract(0n);
-      expect(runCircuit(contract.circuits.maxSupply)).toBe(MAX_UINT128);
-    });
-
-    it('initializes owner and accounts with zero balances and allowances', () => {
-      expect(runCircuit(contract.circuits.balanceOf, ownerAccount)).toBe(0n);
-      expect(runCircuit(contract.circuits.balanceOf, aliceAccount)).toBe(0n);
-      expect(runCircuit(contract.circuits.allowance, ownerAccount, aliceAccount)).toBe(0n);
-    });
-  });
-
-  describe('Authentication & Authorization', () => {
-    it('fails when caller secret key does not correspond to provided account parameter', () => {
-      setCallerSecretKey(ALICE_SK);
-      expect(() => {
-        runCircuit(contract.circuits.transfer, bobAccount, aliceAccount, 100n);
-      }).toThrow('FungibleToken: caller authorization failed');
-    });
-
-    it('fails when unauthorized key attempts owner-only action', () => {
-      setCallerSecretKey(UNAUTHORIZED_SK);
-      expect(() => {
-        runCircuit(contract.circuits.mint, aliceAccount, 100n);
-      }).toThrow('FungibleToken: caller authorization failed');
+    it('should fallback maxSupply to MAX_UINT128 when initialized with 0', () => {
+      initContract(CONTRACT_SALT, OWNER_ACCOUNT, TOKEN_NAME, TOKEN_SYMBOL, 18n, 0n);
+      const state = getLedger();
+      expect(state._maxSupply).toBe(MAX_UINT128);
+      expect(state._decimals).toBe(18n);
     });
   });
 
-  describe('Minting', () => {
-    it('allows owner to mint tokens to an account', () => {
+  // ==========================================================================
+  // Minting Tests
+  // ==========================================================================
+
+  describe('mint', () => {
+    it('should allow owner to mint tokens to an account', () => {
       setCallerSecretKey(OWNER_SK);
-      const success = runCircuit(contract.circuits.mint, aliceAccount, 500n);
+      const mintAmount = 500_000n;
+      const success = runCircuit(contract.circuits.mint, ALICE_ACCOUNT, mintAmount);
+
       expect(success).toBe(true);
-
-      expect(runCircuit(contract.circuits.balanceOf, aliceAccount)).toBe(500n);
-      expect(runCircuit(contract.circuits.totalSupply)).toBe(500n);
+      expect(getBalance(ALICE_ACCOUNT)).toBe(mintAmount);
+      expect(getLedger()._totalSupply).toBe(mintAmount);
     });
 
-    it('fails when non-owner attempts to mint', () => {
+    it('should fail when a non-owner tries to mint', () => {
       setCallerSecretKey(ALICE_SK);
       expect(() => {
-        runCircuit(contract.circuits.mint, aliceAccount, 100n);
+        runCircuit(contract.circuits.mint, ALICE_ACCOUNT, 1000n);
       }).toThrow('FungibleToken: caller authorization failed');
     });
 
-    it('fails when minting to the zero address', () => {
+    it('should fail when minting to zero address', () => {
       setCallerSecretKey(OWNER_SK);
       expect(() => {
-        runCircuit(contract.circuits.mint, zeroKey(), 100n);
+        runCircuit(contract.circuits.mint, ZERO_KEY, 1000n);
       }).toThrow('FungibleToken: invalid receiver');
     });
 
-    it('fails when minting exceeds max supply', () => {
+    it('should fail when mint amount exceeds max supply', () => {
       setCallerSecretKey(OWNER_SK);
       expect(() => {
-        runCircuit(contract.circuits.mint, aliceAccount, INITIAL_MAX_SUPPLY + 1n);
+        runCircuit(contract.circuits.mint, ALICE_ACCOUNT, DEFAULT_MAX_SUPPLY + 1n);
       }).toThrow('FungibleToken: supply overflow');
     });
+
+    it('should fail when attempting to mint while contract is paused', () => {
+      setCallerSecretKey(OWNER_SK);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
+      expect(getLedger()._paused).toBe(true);
+
+      expect(() => {
+        runCircuit(contract.circuits.mint, ALICE_ACCOUNT, 1000n);
+      }).toThrow('FungibleToken: contract is paused');
+    });
   });
 
-  describe('Transfers', () => {
+  // ==========================================================================
+  // Transfer Tests
+  // ==========================================================================
+
+  describe('transfer', () => {
     beforeEach(() => {
       setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.mint, aliceAccount, 1_000n);
+      runCircuit(contract.circuits.mint, ALICE_ACCOUNT, 10_000n);
     });
 
-    it('allows token holders to transfer balances', () => {
+    it('should transfer tokens between accounts when caller is authorized', () => {
       setCallerSecretKey(ALICE_SK);
-      const success = runCircuit(contract.circuits.transfer, aliceAccount, bobAccount, 400n);
-      expect(success).toBe(true);
+      const transferAmount = 3_000n;
+      const success = runCircuit(contract.circuits.transfer, ALICE_ACCOUNT, BOB_ACCOUNT, transferAmount);
 
-      expect(runCircuit(contract.circuits.balanceOf, aliceAccount)).toBe(600n);
-      expect(runCircuit(contract.circuits.balanceOf, bobAccount)).toBe(400n);
-      expect(runCircuit(contract.circuits.totalSupply)).toBe(1_000n);
+      expect(success).toBe(true);
+      expect(getBalance(ALICE_ACCOUNT)).toBe(7_000n);
+      expect(getBalance(BOB_ACCOUNT)).toBe(3_000n);
+      expect(getLedger()._totalSupply).toBe(10_000n);
     });
 
-    it('allows self-transfers when balance is sufficient', () => {
+    it('should allow self-transfer when balance is sufficient without altering balances', () => {
       setCallerSecretKey(ALICE_SK);
-      const success = runCircuit(contract.circuits.transfer, aliceAccount, aliceAccount, 300n);
+      const success = runCircuit(contract.circuits.transfer, ALICE_ACCOUNT, ALICE_ACCOUNT, 5_000n);
+
       expect(success).toBe(true);
-      expect(runCircuit(contract.circuits.balanceOf, aliceAccount)).toBe(1_000n);
+      expect(getBalance(ALICE_ACCOUNT)).toBe(10_000n);
     });
 
-    it('fails on self-transfer when balance is insufficient', () => {
+    it('should fail self-transfer when balance is insufficient', () => {
       setCallerSecretKey(ALICE_SK);
       expect(() => {
-        runCircuit(contract.circuits.transfer, aliceAccount, aliceAccount, 1_001n);
+        runCircuit(contract.circuits.transfer, ALICE_ACCOUNT, ALICE_ACCOUNT, 15_000n);
       }).toThrow('FungibleToken: insufficient balance');
     });
 
-    it('fails when transferring to zero address', () => {
-      setCallerSecretKey(ALICE_SK);
+    it('should fail transfer when caller authorization fails', () => {
+      setCallerSecretKey(BOB_SK);
       expect(() => {
-        runCircuit(contract.circuits.transfer, aliceAccount, zeroKey(), 100n);
-      }).toThrow('FungibleToken: invalid receiver');
-    });
-
-    it('fails when transferring more than current balance', () => {
-      setCallerSecretKey(ALICE_SK);
-      expect(() => {
-        runCircuit(contract.circuits.transfer, aliceAccount, bobAccount, 1_500n);
-      }).toThrow('FungibleToken: insufficient balance');
-    });
-  });
-
-  describe('Approvals & Allowances', () => {
-    it('allows account to approve spender allowance', () => {
-      setCallerSecretKey(ALICE_SK);
-      const success = runCircuit(contract.circuits.approve, aliceAccount, bobAccount, 500n);
-      expect(success).toBe(true);
-
-      expect(runCircuit(contract.circuits.allowance, aliceAccount, bobAccount)).toBe(500n);
-    });
-
-    it('fails approval when owner is zero address', () => {
-      setCallerSecretKey(ALICE_SK);
-      expect(() => {
-        runCircuit(contract.circuits.approve, zeroKey(), bobAccount, 100n);
+        runCircuit(contract.circuits.transfer, ALICE_ACCOUNT, BOB_ACCOUNT, 1_000n);
       }).toThrow('FungibleToken: caller authorization failed');
     });
 
-    it('fails approval when spender is zero address', () => {
+    it('should fail when transfer amount exceeds available balance', () => {
       setCallerSecretKey(ALICE_SK);
       expect(() => {
-        runCircuit(contract.circuits.approve, aliceAccount, zeroKey(), 100n);
-      }).toThrow('FungibleToken: invalid spender');
+        runCircuit(contract.circuits.transfer, ALICE_ACCOUNT, BOB_ACCOUNT, 15_000n);
+      }).toThrow('FungibleToken: insufficient balance');
+    });
+
+    it('should fail transfer to zero address', () => {
+      setCallerSecretKey(ALICE_SK);
+      expect(() => {
+        runCircuit(contract.circuits.transfer, ALICE_ACCOUNT, ZERO_KEY, 1_000n);
+      }).toThrow('FungibleToken: invalid receiver');
+    });
+
+    it('should fail transfer when contract is paused', () => {
+      setCallerSecretKey(OWNER_SK);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
+
+      setCallerSecretKey(ALICE_SK);
+      expect(() => {
+        runCircuit(contract.circuits.transfer, ALICE_ACCOUNT, BOB_ACCOUNT, 1_000n);
+      }).toThrow('FungibleToken: contract is paused');
     });
   });
 
-  describe('TransferFrom', () => {
+  // ==========================================================================
+  // Approvals & TransferFrom Tests
+  // ==========================================================================
+
+  describe('approve & transferFrom', () => {
     beforeEach(() => {
       setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.mint, aliceAccount, 1_000n);
+      runCircuit(contract.circuits.mint, ALICE_ACCOUNT, 20_000n);
     });
 
-    it('allows spender to transfer tokens within approved allowance', () => {
+    it('should approve allowance and allow spender to execute transferFrom', () => {
       setCallerSecretKey(ALICE_SK);
-      runCircuit(contract.circuits.approve, aliceAccount, bobAccount, 400n);
+      const approveAmount = 8_000n;
+      const approveSuccess = runCircuit(contract.circuits.approve, ALICE_ACCOUNT, BOB_ACCOUNT, approveAmount);
+
+      expect(approveSuccess).toBe(true);
+      expect(getAllowance(ALICE_ACCOUNT, BOB_ACCOUNT)).toBe(approveAmount);
 
       setCallerSecretKey(BOB_SK);
-      const success = runCircuit(contract.circuits.transferFrom, bobAccount, aliceAccount, charlieAccount, 250n);
-      expect(success).toBe(true);
+      const transferAmount = 5_000n;
+      const transferSuccess = runCircuit(
+        contract.circuits.transferFrom,
+        BOB_ACCOUNT,
+        ALICE_ACCOUNT,
+        BOB_ACCOUNT,
+        transferAmount,
+      );
 
-      expect(runCircuit(contract.circuits.balanceOf, aliceAccount)).toBe(750n);
-      expect(runCircuit(contract.circuits.balanceOf, charlieAccount)).toBe(250n);
-      expect(runCircuit(contract.circuits.allowance, aliceAccount, bobAccount)).toBe(150n);
+      expect(transferSuccess).toBe(true);
+      expect(getBalance(ALICE_ACCOUNT)).toBe(15_000n);
+      expect(getBalance(BOB_ACCOUNT)).toBe(5_000n);
+      expect(getAllowance(ALICE_ACCOUNT, BOB_ACCOUNT)).toBe(3_000n);
     });
 
-    it('does not reduce allowance when set to MAX_UINT128 (infinite allowance)', () => {
-      setCallerSecretKey(ALICE_SK);
-      runCircuit(contract.circuits.approve, aliceAccount, bobAccount, MAX_UINT128);
-
+    it('should fail approve when caller authorization fails', () => {
       setCallerSecretKey(BOB_SK);
-      runCircuit(contract.circuits.transferFrom, bobAccount, aliceAccount, charlieAccount, 300n);
-
-      expect(runCircuit(contract.circuits.allowance, aliceAccount, bobAccount)).toBe(MAX_UINT128);
-      expect(runCircuit(contract.circuits.balanceOf, charlieAccount)).toBe(300n);
+      expect(() => {
+        runCircuit(contract.circuits.approve, ALICE_ACCOUNT, BOB_ACCOUNT, 1000n);
+      }).toThrow('FungibleToken: caller authorization failed');
     });
 
-    it('fails when transfer amount exceeds approved allowance', () => {
+    it('should fail approve to zero address spender', () => {
       setCallerSecretKey(ALICE_SK);
-      runCircuit(contract.circuits.approve, aliceAccount, bobAccount, 200n);
+      expect(() => {
+        runCircuit(contract.circuits.approve, ALICE_ACCOUNT, ZERO_KEY, 1000n);
+      }).toThrow('FungibleToken: invalid spender');
+    });
+
+    it('should fail transferFrom when allowance is insufficient', () => {
+      setCallerSecretKey(ALICE_SK);
+      runCircuit(contract.circuits.approve, ALICE_ACCOUNT, BOB_ACCOUNT, 2_000n);
 
       setCallerSecretKey(BOB_SK);
       expect(() => {
-        runCircuit(contract.circuits.transferFrom, bobAccount, aliceAccount, charlieAccount, 201n);
+        runCircuit(contract.circuits.transferFrom, BOB_ACCOUNT, ALICE_ACCOUNT, BOB_ACCOUNT, 2_001n);
       }).toThrow('FungibleToken: insufficient allowance');
     });
 
-    it('fails when token owner has insufficient balance despite sufficient allowance', () => {
+    it('should fail transferFrom when contract is paused', () => {
       setCallerSecretKey(ALICE_SK);
-      runCircuit(contract.circuits.approve, aliceAccount, bobAccount, 2_000n);
+      runCircuit(contract.circuits.approve, ALICE_ACCOUNT, BOB_ACCOUNT, 5_000n);
+
+      setCallerSecretKey(OWNER_SK);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
 
       setCallerSecretKey(BOB_SK);
       expect(() => {
-        runCircuit(contract.circuits.transferFrom, bobAccount, aliceAccount, charlieAccount, 1_500n);
-      }).toThrow('FungibleToken: insufficient balance');
+        runCircuit(contract.circuits.transferFrom, BOB_ACCOUNT, ALICE_ACCOUNT, BOB_ACCOUNT, 1_000n);
+      }).toThrow('FungibleToken: contract is paused');
     });
   });
 
-  describe('Burning', () => {
+  // ==========================================================================
+  // Burning Tests
+  // ==========================================================================
+
+  describe('burn', () => {
     beforeEach(() => {
       setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.mint, aliceAccount, 1_000n);
+      runCircuit(contract.circuits.mint, ALICE_ACCOUNT, 10_000n);
     });
 
-    it('allows token holders to burn their tokens', () => {
+    it('should allow token holder to burn their own tokens', () => {
       setCallerSecretKey(ALICE_SK);
-      const success = runCircuit(contract.circuits.burn, aliceAccount, 400n);
-      expect(success).toBe(true);
+      const burnAmount = 4_000n;
+      const success = runCircuit(contract.circuits.burn, ALICE_ACCOUNT, burnAmount);
 
-      expect(runCircuit(contract.circuits.balanceOf, aliceAccount)).toBe(600n);
-      expect(runCircuit(contract.circuits.totalSupply)).toBe(600n);
+      expect(success).toBe(true);
+      expect(getBalance(ALICE_ACCOUNT)).toBe(6_000n);
+      expect(getLedger()._totalSupply).toBe(6_000n);
     });
 
-    it('fails when burning more than balance', () => {
+    it('should fail burn when amount exceeds holder balance', () => {
       setCallerSecretKey(ALICE_SK);
       expect(() => {
-        runCircuit(contract.circuits.burn, aliceAccount, 1_001n);
+        runCircuit(contract.circuits.burn, ALICE_ACCOUNT, 10_001n);
       }).toThrow('FungibleToken: insufficient balance');
     });
 
-    it('fails when burning with unauthenticated account', () => {
+    it('should fail burn when caller authorization fails', () => {
       setCallerSecretKey(BOB_SK);
       expect(() => {
-        runCircuit(contract.circuits.burn, aliceAccount, 100n);
+        runCircuit(contract.circuits.burn, ALICE_ACCOUNT, 1_000n);
       }).toThrow('FungibleToken: caller authorization failed');
     });
+
+    it('should fail burn when contract is paused', () => {
+      setCallerSecretKey(OWNER_SK);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
+
+      setCallerSecretKey(ALICE_SK);
+      expect(() => {
+        runCircuit(contract.circuits.burn, ALICE_ACCOUNT, 1_000n);
+      }).toThrow('FungibleToken: contract is paused');
+    });
   });
 
-  describe('Emergency Stop (Pause / Unpause)', () => {
-    beforeEach(() => {
+  // ==========================================================================
+  // Emergency Stop & Pauser Tests
+  // ==========================================================================
+
+  describe('Emergency Stop (pause / unpause / setEmergencyPauser)', () => {
+    it('should allow owner to pause and unpause the contract', () => {
       setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.mint, aliceAccount, 1_000n);
+
+      const pauseSuccess = runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
+      expect(pauseSuccess).toBe(true);
+      expect(getLedger()._paused).toBe(true);
+
+      const unpauseSuccess = runCircuit(contract.circuits.unpause, OWNER_ACCOUNT);
+      expect(unpauseSuccess).toBe(true);
+      expect(getLedger()._paused).toBe(false);
     });
 
-    it('allows owner to pause and unpause the contract', () => {
+    it('should fail when pausing an already paused contract', () => {
       setCallerSecretKey(OWNER_SK);
-      expect(runCircuit(contract.circuits.paused)).toBe(false);
-
-      runCircuit(contract.circuits.pause, ownerAccount);
-      expect(runCircuit(contract.circuits.paused)).toBe(true);
-
-      runCircuit(contract.circuits.unpause, ownerAccount);
-      expect(runCircuit(contract.circuits.paused)).toBe(false);
-    });
-
-    it('fails when pausing while already paused', () => {
-      setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.pause, ownerAccount);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
 
       expect(() => {
-        runCircuit(contract.circuits.pause, ownerAccount);
+        runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
       }).toThrow('FungibleToken: contract is paused');
     });
 
-    it('fails when unpausing while not paused', () => {
+    it('should fail when unpausing a contract that is not paused', () => {
       setCallerSecretKey(OWNER_SK);
       expect(() => {
-        runCircuit(contract.circuits.unpause, ownerAccount);
+        runCircuit(contract.circuits.unpause, OWNER_ACCOUNT);
       }).toThrow('FungibleToken: contract is not paused');
     });
 
-    it('fails when unauthorized user attempts to pause or unpause', () => {
-      setCallerSecretKey(UNAUTHORIZED_SK);
-      expect(() => {
-        runCircuit(contract.circuits.pause, unauthorizedAccount);
-      }).toThrow('FungibleToken: only pauser or owner can call this');
-
+    it('should allow owner to configure emergency pauser role and allow pauser to toggle pause', () => {
       setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.pause, ownerAccount);
+      const setPauserSuccess = runCircuit(contract.circuits.setEmergencyPauser, OWNER_ACCOUNT, PAUSER_ACCOUNT);
+      expect(setPauserSuccess).toBe(true);
+      expect(getLedger()._emergencyPauser).toEqual(PAUSER_ACCOUNT);
 
-      setCallerSecretKey(UNAUTHORIZED_SK);
-      expect(() => {
-        runCircuit(contract.circuits.unpause, unauthorizedAccount);
-      }).toThrow('FungibleToken: only pauser or owner can call this');
-    });
-
-    it('blocks transfer, approve, transferFrom, mint, and burn when paused', () => {
-      setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.pause, ownerAccount);
-
-      // Attempt transfer
-      setCallerSecretKey(ALICE_SK);
-      expect(() => {
-        runCircuit(contract.circuits.transfer, aliceAccount, bobAccount, 100n);
-      }).toThrow('FungibleToken: contract is paused');
-
-      // Attempt approve
-      expect(() => {
-        runCircuit(contract.circuits.approve, aliceAccount, bobAccount, 100n);
-      }).toThrow('FungibleToken: contract is paused');
-
-      // Attempt transferFrom
-      setCallerSecretKey(BOB_SK);
-      expect(() => {
-        runCircuit(contract.circuits.transferFrom, bobAccount, aliceAccount, charlieAccount, 100n);
-      }).toThrow('FungibleToken: contract is paused');
-
-      // Attempt mint
-      setCallerSecretKey(OWNER_SK);
-      expect(() => {
-        runCircuit(contract.circuits.mint, aliceAccount, 100n);
-      }).toThrow('FungibleToken: contract is paused');
-
-      // Attempt burn
-      setCallerSecretKey(ALICE_SK);
-      expect(() => {
-        runCircuit(contract.circuits.burn, aliceAccount, 100n);
-      }).toThrow('FungibleToken: contract is paused');
-    });
-
-    it('restores operations after unpausing', () => {
-      setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.pause, ownerAccount);
-      runCircuit(contract.circuits.unpause, ownerAccount);
-
-      setCallerSecretKey(ALICE_SK);
-      const success = runCircuit(contract.circuits.transfer, aliceAccount, bobAccount, 100n);
-      expect(success).toBe(true);
-      expect(runCircuit(contract.circuits.balanceOf, bobAccount)).toBe(100n);
-    });
-  });
-
-  describe('Emergency Pauser Role Management', () => {
-    it('allows owner to designate a distinct emergency pauser', () => {
-      setCallerSecretKey(OWNER_SK);
-      const success = runCircuit(contract.circuits.setEmergencyPauser, ownerAccount, pauserAccount);
-      expect(success).toBe(true);
-
-      // New emergency pauser can pause contract
       setCallerSecretKey(PAUSER_SK);
-      runCircuit(contract.circuits.pause, pauserAccount);
-      expect(runCircuit(contract.circuits.paused)).toBe(true);
+      const pauseSuccess = runCircuit(contract.circuits.pause, PAUSER_ACCOUNT);
+      expect(pauseSuccess).toBe(true);
+      expect(getLedger()._paused).toBe(true);
 
-      // Pauser can also unpause
-      runCircuit(contract.circuits.unpause, pauserAccount);
-      expect(runCircuit(contract.circuits.paused)).toBe(false);
+      const unpauseSuccess = runCircuit(contract.circuits.unpause, PAUSER_ACCOUNT);
+      expect(unpauseSuccess).toBe(true);
+      expect(getLedger()._paused).toBe(false);
     });
 
-    it('fails when non-owner attempts to set emergency pauser', () => {
-      setCallerSecretKey(ALICE_SK);
-      expect(() => {
-        runCircuit(contract.circuits.setEmergencyPauser, aliceAccount, pauserAccount);
-      }).toThrow('FungibleToken: only owner can call this');
-    });
-
-    it('fails when owner attempts to set zero address as emergency pauser', () => {
+    it('should reject setting zero address as emergency pauser', () => {
       setCallerSecretKey(OWNER_SK);
       expect(() => {
-        runCircuit(contract.circuits.setEmergencyPauser, ownerAccount, zeroKey());
+        runCircuit(contract.circuits.setEmergencyPauser, OWNER_ACCOUNT, ZERO_KEY);
       }).toThrow('FungibleToken: invalid pauser address');
     });
+
+    it('should reject unauthorized callers from setting emergency pauser', () => {
+      setCallerSecretKey(UNAUTHORIZED_SK);
+      expect(() => {
+        runCircuit(contract.circuits.setEmergencyPauser, UNAUTHORIZED_ACCOUNT, PAUSER_ACCOUNT);
+      }).toThrow('FungibleToken: only owner can call this');
+    });
+
+    it('should reject unauthorized callers from pausing or unpausing', () => {
+      setCallerSecretKey(UNAUTHORIZED_SK);
+      expect(() => {
+        runCircuit(contract.circuits.pause, UNAUTHORIZED_ACCOUNT);
+      }).toThrow('FungibleToken: only pauser or owner can call this');
+
+      setCallerSecretKey(OWNER_SK);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
+
+      setCallerSecretKey(UNAUTHORIZED_SK);
+      expect(() => {
+        runCircuit(contract.circuits.unpause, UNAUTHORIZED_ACCOUNT);
+      }).toThrow('FungibleToken: only pauser or owner can call this');
+    });
   });
 
-  describe('Emergency Withdrawal', () => {
-    it('fails emergency withdrawal when contract is not paused', () => {
+  // ==========================================================================
+  // Emergency Withdrawal Tests
+  // ==========================================================================
+
+  describe('emergencyWithdraw', () => {
+    const dummyContractToken = { bytes: createKey(42) };
+
+    it('should fail emergency withdrawal when contract is not paused', () => {
       setCallerSecretKey(OWNER_SK);
       expect(() => {
-        runCircuit(contract.circuits.emergencyWithdraw, ownerAccount, { bytes: dummyAddressBytes }, 100n);
+        runCircuit(contract.circuits.emergencyWithdraw, OWNER_ACCOUNT, dummyContractToken, 1000n);
       }).toThrow('FungibleToken: contract is not paused');
     });
 
-    it('fails emergency withdrawal when called by non-owner even if paused', () => {
+    it('should fail emergency withdrawal when called by non-owner', () => {
       setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.pause, ownerAccount);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
 
       setCallerSecretKey(ALICE_SK);
       expect(() => {
-        runCircuit(contract.circuits.emergencyWithdraw, aliceAccount, { bytes: dummyAddressBytes }, 100n);
+        runCircuit(contract.circuits.emergencyWithdraw, ALICE_ACCOUNT, dummyContractToken, 1000n);
       }).toThrow('FungibleToken: only owner can call this');
+    });
+
+    it('should fail emergency withdrawal when contract balance is insufficient', () => {
+      setCallerSecretKey(OWNER_SK);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
+
+      expect(() => {
+        runCircuit(contract.circuits.emergencyWithdraw, OWNER_ACCOUNT, dummyContractToken, 500n);
+      }).toThrow('FungibleToken: insufficient balance');
     });
   });
 });

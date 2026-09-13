@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { Send, ShieldAlert, CheckCircle2, Loader2, Sparkles, ArrowRight, Clock, Box, Flame, Zap } from 'lucide-react';
 import { useToast } from '@/src/presentation/context/ToastContext';
+import { formatDustFee } from '@/src/lib/dust-utils';
 
 interface MessagePublisherProps {
   seed: string;
@@ -300,7 +301,7 @@ export const MessagePublisher: React.FC<MessagePublisherProps> = ({
                   </span>
                   <span className="text-amber-200 block text-[12px] font-bold mt-0.5">
                     {txResult.dustPaid && txResult.dustPaid !== '0'
-                      ? `${BigInt(txResult.dustPaid).toLocaleString()} DUST`
+                      ? formatDustFee(txResult.dustPaid)
                       : 'Covered via DUST UTXO'}
                   </span>
                 </div>

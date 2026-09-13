@@ -13,6 +13,7 @@ export ledger _name: Opaque<"string">;
 export ledger _symbol: Opaque<"string">;
 export ledger _decimals: Uint<8>;
 export ledger owner: Bytes<32>;
+export ledger _contractSalt: Bytes<32>;
 
 // ============ NEW: Emergency Stop State ============
 export ledger _paused: Boolean;
@@ -24,13 +25,14 @@ witness localSecretKey(): Bytes<32>;
 /**
  * Authenticates that the prover possesses the private secret key
  * corresponding to the specified public identity/address.
+ * Bound to _contractSalt for cross-contract replay protection.
  */
 circuit authenticate(account: Bytes<32>): [] {
   const sk = localSecretKey();
   const domainTag = pad(32, "fungible-token:auth");
-  const derivedAccount = persistentHash<[Bytes<32>, ContractAddress, Bytes<32>]>([
+  const derivedAccount = persistentHash<[Bytes<32>, Bytes<32>, Bytes<32>]>([
     domainTag,
-    kernel.self(),
+    _contractSalt,
     sk
   ]);
   assert(derivedAccount == account, "FungibleToken: caller authorization failed");
@@ -58,6 +60,7 @@ circuit onlyPauser(account: Bytes<32>): [] {
 }
 
 constructor(
+  salt_: Bytes<32>,
   initialOwner: Bytes<32>,
   name_: Opaque<"string">,
   symbol_: Opaque<"string">,
@@ -65,6 +68,7 @@ constructor(
   maxSupply_: Uint<128>
 ) {
   const MAX_UINT128 = 340282366920938463463374607431768211455;
+  _contractSalt = disclose(salt_);
   owner = disclose(initialOwner);
   _name = disclose(name_);
   _symbol = disclose(symbol_);
@@ -81,34 +85,16 @@ constructor(
   _emergencyPauser = disclose(initialOwner); // Default to owner
 }
 
-export circuit name(): Opaque<"string"> {
-  return _name;
-}
+// ============ Internal Ledger Helpers ============
 
-export circuit symbol(): Opaque<"string"> {
-  return _symbol;
-}
-
-export circuit decimals(): Uint<8> {
-  return _decimals;
-}
-
-export circuit maxSupply(): Uint<128> {
-  return _maxSupply;
-}
-
-export circuit totalSupply(): Uint<128> {
-  return _totalSupply;
-}
-
-export circuit balanceOf(account: Bytes<32>): Uint<128> {
+circuit balanceOf(account: Bytes<32>): Uint<128> {
   if (disclose(!_balances.member(disclose(account)))) {
     return 0;
   }
   return _balances.lookup(disclose(account));
 }
 
-export circuit allowance(
+circuit allowance(
   ownerAccount: Bytes<32>,
   spender: Bytes<32>
 ): Uint<128> {
@@ -152,13 +138,6 @@ export circuit setEmergencyPauser(caller: Bytes<32>, newPauser: Bytes<32>): Bool
   assert(!isZeroKey(newPauser), "FungibleToken: invalid pauser address");
   _emergencyPauser = disclose(newPauser);
   return true;
-}
-
-/**
- * View function to check pause status
- */
-export circuit paused(): Boolean {
-  return _paused;
 }
 
 // ============ MODIFIED: Transfer with pause check ============

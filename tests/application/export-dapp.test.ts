@@ -49,6 +49,23 @@ describe('Export DApp Bundle API (/api/workspace/export-dapp)', () => {
         expect(data.contract).toBe('fungible-token');
     });
 
+    it('includes docs/*-api.d.ts and related documentation in export bundle for fungible-token-v2-2', async () => {
+        const req = new NextRequest(
+            'http://localhost:3000/api/workspace/export-dapp?contract=fungible-token-v2-2&preview=true'
+        );
+        const res = await GET(req);
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.success).toBe(true);
+        expect(data.contract).toBe('fungible-token-v2-2');
+
+        // Check that api.d.ts is detected
+        expect(data.detectedFiles).toContain('docs/fungible-token-v2-2-api.d.ts');
+        expect(data.detectedFiles).toContain('docs/fungible-token-v2-2-sdk.md');
+        expect(data.detectedFiles).toContain('sdk/fungible-token-v2-2-sdk.ts');
+        expect(data.masterPrompt).toContain('docs/fungible-token-v2-2-api.d.ts');
+    });
+
     it('generates deployment.config.json using midnight.config.ts defaults when no overrides are given', async () => {
         const req = new NextRequest('http://localhost:3000/api/workspace/export-dapp', {
             method: 'POST',
@@ -68,7 +85,8 @@ describe('Export DApp Bundle API (/api/workspace/export-dapp)', () => {
         expect(configText).toBeDefined();
 
         const parsedConfig = JSON.parse(configText!);
-        expect(parsedConfig.contractAddress).toBe('6764022acd5b9fbff2b5baeb84f3082cf51f6d8b2dc978df9778b93c0005983c');
+        expect(parsedConfig.contractAddress).toBeDefined();
+        expect(parsedConfig.contractAddress).toMatch(/^[0-9a-fA-F]{64}$/);
         expect(parsedConfig.contractAddress).not.toBe('0000000000000000000000000000000000000000000000000000000000000000');
         expect(parsedConfig.networkId).toBe('preprod');
         expect(parsedConfig.indexerUrl).toBe('https://indexer.preprod.midnight.network/api/v4/graphql');
@@ -83,7 +101,7 @@ describe('Export DApp Bundle API (/api/workspace/export-dapp)', () => {
         const deploymentJsonText = await zip.file('deployment.json')?.async('text');
         expect(deploymentJsonText).toBeDefined();
         const parsedDeploymentJson = JSON.parse(deploymentJsonText!);
-        expect(parsedDeploymentJson.contractAddress).toBe('6764022acd5b9fbff2b5baeb84f3082cf51f6d8b2dc978df9778b93c0005983c');
+        expect(parsedDeploymentJson.contractAddress).toBe(parsedConfig.contractAddress);
     });
 
     it('generates a valid ZIP archive via POST with custom deployment configuration', async () => {

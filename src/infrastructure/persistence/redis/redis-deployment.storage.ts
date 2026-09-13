@@ -83,6 +83,8 @@ export class RedisDeploymentStorage implements IDeploymentStorage {
                 network: record.network || 'preprod',
                 deployedAt: record.deployedAt || new Date().toISOString(),
                 owner: (record as any).owner,
+                contractSalt: (record as any).contractSalt,
+                deployerAddress: (record as any).deployerAddress,
             };
 
             const filtered = deployments.filter((d) => d.contractAddress.toLowerCase() !== normalized.contractAddress.toLowerCase());

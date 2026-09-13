@@ -25,6 +25,7 @@
     "migrate:redis": "tsx src/migrate-to-redis.ts"
   },
   "devDependencies": {
+    "@midnight-ntwrk/dapp-connector-api": "^4.0.1",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.1",
     "tsx": "^4.23.1",

@@ -24,6 +24,7 @@ export interface DeployContractInput {
     contractType?: string;
     privateStatePassword?: string;
     constructorArgs?: Record<string, any> | any[];
+    deployerAddress?: string;
 }
 
 export interface DeployContractOutput extends DeploymentExecutionReceipt {}

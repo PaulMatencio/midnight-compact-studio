@@ -82,27 +82,45 @@ CRITICAL RULES TO ENSURE TESTS PASS ON COMPACT RUNTIME:
    \`\`\`
 
 4. DYNAMIC PERSISTENT HASH RESOLUTION:
-   Do NOT hardcode \`_persistentHash_0\`. In Compact contracts with multiple hashes, find the method on helperContract that changes output when \`sk\` changes:
+   Do NOT hardcode \`_persistentHash_0\`. In Compact contracts with multiple hashes, find the method on helperContract that changes output when \`sk\` changes (testing both plain \`salt\` and \`{ bytes: salt }\` for compatibility with Bytes<32> and ContractAddress):
    \`\`\`typescript
-   const dummyAddressBytes = Uint8Array.from(Buffer.from(dummyContractAddress, 'hex'));
+   const dummySalt = new Uint8Array(32).fill(7);
    const helperContract = new Contract({ localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)] });
    const proto = Object.getPrototypeOf(helperContract);
    const hashMethods = Object.getOwnPropertyNames(proto).filter((k) => k.startsWith('_persistentHash'));
-   const accountHashMethod = hashMethods.find((method) => {
-     try {
-       const t1 = (helperContract as any)[method]([domainTagAuth, { bytes: dummyAddressBytes }, createKey(1)]);
-       const t2 = (helperContract as any)[method]([domainTagAuth, { bytes: dummyAddressBytes }, createKey(2)]);
-       return t1 instanceof Uint8Array && t2 instanceof Uint8Array && Buffer.from(t1).compare(Buffer.from(t2)) !== 0;
-     } catch { return false; }
-   }) || '_persistentHash_0';
+   let accountHashMethod = '_persistentHash_1';
+   let passWrappedObject = false;
 
-   const deriveAccount = (sk: Uint8Array): Uint8Array => {
-     return (helperContract as any)[accountHashMethod]([domainTagAuth, { bytes: dummyAddressBytes }, sk]);
+   for (const method of hashMethods) {
+     try {
+       const t1 = (helperContract as any)[method]([domainTagAuth, dummySalt, createKey(1)]);
+       const t2 = (helperContract as any)[method]([domainTagAuth, dummySalt, createKey(2)]);
+       if (t1 instanceof Uint8Array && t2 instanceof Uint8Array && Buffer.from(t1).compare(Buffer.from(t2)) !== 0) {
+         accountHashMethod = method;
+         passWrappedObject = false;
+         break;
+       }
+     } catch {}
+     try {
+       const t1 = (helperContract as any)[method]([domainTagAuth, { bytes: dummySalt }, createKey(1)]);
+       const t2 = (helperContract as any)[method]([domainTagAuth, { bytes: dummySalt }, createKey(2)]);
+       if (t1 instanceof Uint8Array && t2 instanceof Uint8Array && Buffer.from(t1).compare(Buffer.from(t2)) !== 0) {
+         accountHashMethod = method;
+         passWrappedObject = true;
+         break;
+       }
+     } catch {}
+   }
+
+   const deriveAccount = (sk: Uint8Array, salt: Uint8Array = CONTRACT_SALT): Uint8Array => {
+     const saltArg = passWrappedObject ? { bytes: salt } : salt;
+     return (helperContract as any)[accountHashMethod]([domainTagAuth, saltArg, sk]);
    };
    \`\`\`
 
-5. UNEXPORTED CIRCUITS:
+5. UNEXPORTED CIRCUITS & PUBLIC LEDGER STATE:
    Only circuits with \`export circuit\` exist on \`contract.circuits\`. Do not call private circuits like \`isZeroKey\` on the contract; implement local TS helpers for them instead.
+   Public ledger variables (_balances, _allowances, _totalSupply, _maxSupply, _name, _symbol, _decimals, _paused) must be queried directly via \`ledger(state)\`, NOT by calling \`contract.circuits.<field>()\`.
 
 Return the complete, corrected test suite inside a single \`\`\`typescript ... \`\`\` code block.
 `;
@@ -239,8 +257,49 @@ export async function POST(req: NextRequest) {
                 timestamp: new Date().toISOString(),
             });
 
-            const clientPrompt = `
-Task: Generate a production-grade TypeScript client SDK, comprehensive technical documentation, a runnable example script, and an install shell script for this Midnight Compact smart contract.
+            // Helper to extract content safely between demarcation tags or regex fallbacks, with fence sanitization
+            const sanitizeExtracted = (raw: string): string => {
+                let clean = raw.trim();
+                if (clean.startsWith('```')) {
+                    clean = clean.replace(/^```[^\r\n]*\r?\n/, '');
+                    clean = clean.replace(/\r?\n```\s*$/, '');
+                }
+                return clean.trim();
+            };
+
+            const extractDelimitedContent = (
+                text: string,
+                targetFilePath: string,
+                fallbackPatterns: RegExp[] = []
+            ): string => {
+                const escaped = targetFilePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const tagRegex = new RegExp(`<<<START_FILE:${escaped}>>>([\\s\\S]*?)<<<END_FILE>>>`, 'i');
+                const tagMatch = text.match(tagRegex);
+                if (tagMatch && tagMatch[1].trim()) {
+                    return sanitizeExtracted(tagMatch[1]);
+                }
+
+                const base = path.basename(targetFilePath).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const looseRegex = new RegExp(`<<<START_FILE:[^>]*${base}[^>]*>>>([\\s\\S]*?)<<<END_FILE>>>`, 'i');
+                const looseMatch = text.match(looseRegex);
+                if (looseMatch && looseMatch[1].trim()) {
+                    return sanitizeExtracted(looseMatch[1]);
+                }
+
+                for (const pat of fallbackPatterns) {
+                    const m = text.match(pat);
+                    if (m && m[1] && m[1].trim()) {
+                        return sanitizeExtracted(m[1]);
+                    }
+                }
+
+                return '';
+            };
+
+            // Focused Prompt 1: Pure TypeScript Code Artifacts (SDK + Example)
+            const codeArtifactPrompt = `
+Task: Generate the complete, production-grade TypeScript Client SDK class AND a runnable quickstart example script for the Midnight Compact smart contract "${cleanContractName}".
+
 Contract Name: ${cleanContractName}
 Contract Filename: ${cleanContractName}.compact
 
@@ -254,81 +313,174 @@ Generated TypeScript Type Definitions (.d.ts):
 ${dtsContent}
 \`\`\`
 
-Please output FOUR separate, clearly labeled code blocks with file target headers:
+OUTPUT FORMAT REQUIREMENT:
+Output the two files using the exact delimiter tags below. Do NOT wrap files in outer markdown backticks:
 
-1. SDK Implementation:
-\`\`\`typescript:src/client/${cleanContractName}-sdk.ts
-// Complete TypeScript SDK Adapter Class importing from '../../contracts/managed/${cleanContractName}/contract/index.js'
-\`\`\`
+<<<START_FILE:src/client/${cleanContractName}-sdk.ts>>>
+// Production-grade TypeScript SDK Client Adapter Class
+// Rules:
+// 1. Import from '@midnight-ntwrk/compact-runtime'
+// 2. Import contract artifacts strictly from '../../contracts/managed/${cleanContractName}/contract/index.js'
+// 3. Export typed PrivateState and Witnesses interfaces
+// 4. Export ${pascalName}Client class (and export alias: export { ${pascalName}Client as ${pascalName}SDK };)
+// 5. Must include authentication & witness helpers (bound to contractSalt for replay protection):
+//    - CRITICAL: deriveAccount MUST compute Poseidon persistent hash using ManagedContract._persistentHash_1([domainTag, salt, sk]), NEVER sha256!
+//    - public deriveAccount(secretKey: Uint8Array | string, contractSalt?: string | Uint8Array): Uint8Array (and public static deriveAccount)
+//    - public getAuthenticatedCaller(secretKey: Uint8Array | string, contractSalt?: string | Uint8Array): Uint8Array
+//    - public static isAuthorized(secretKey: Uint8Array | string, targetAccount: Uint8Array | string, contractSalt: string | Uint8Array): boolean
+//    - public static createWitnesses<PS>(secretKey: Uint8Array | string): Witnesses<PS>
+// 6. Include initialState(context, ...constructorParams), query methods, and typed circuit execution methods
+<<<END_FILE>>>
 
-2. SDK Documentation:
-\`\`\`markdown:docs/${cleanContractName}-sdk.md
-# Documentation for ${cleanContractName}
-\`\`\`
-
-3. Runnable Quickstart Example:
-\`\`\`typescript:examples/${cleanContractName}-example.ts
+<<<START_FILE:examples/${cleanContractName}-example.ts>>>
 /**
  * Quickstart Example: ${pascalName} Client SDK
  * How to run: npx tsx examples/${cleanContractName}-example.ts
  */
+// Complete runnable TypeScript script importing from '../src/client/${cleanContractName}-sdk.js'
+<<<END_FILE>>>
+`;
+
+            // Focused Prompt 2: Technical Documentation & Install Script
+            const docArtifactPrompt = `
+Task: Generate comprehensive technical documentation and an installation script for the Midnight Compact smart contract "${cleanContractName}".
+
+Contract Name: ${cleanContractName}
+Contract Filename: ${cleanContractName}.compact
+
+Compact Contract Source Code:
+\`\`\`compact
+${compactCode}
 \`\`\`
 
-4. Installation Shell Script:
-\`\`\`bash:scripts/${cleanContractName}-install.sh
-#!/usr/bin/env bash
+Generated TypeScript Type Definitions (.d.ts):
+\`\`\`typescript
+${dtsContent}
 \`\`\`
+
+OUTPUT FORMAT REQUIREMENT:
+Output the two files using the exact delimiter tags below:
+
+<<<START_FILE:docs/${cleanContractName}-sdk.md>>>
+# Technical Documentation: ${cleanContractName} SDK
+
+## Overview
+(Deep architectural description of the contract, its purpose, state model, and privacy boundaries)
+
+## Contract State Architecture
+(Complete schema of public ledger state, data types, and access controls)
+
+## Zero-Knowledge Circuits & Methods
+(Comprehensive table and descriptions of all circuits, parameters, preconditions, and assertions)
+
+## Identity, Caller Authentication & Witness Derivation
+(Detailed guide on how authenticate(account) circuits verify caller identity via derived on-chain commitments:
+ - Cross-contract replay protection using contractSalt
+ - Account derivation using 32-byte secret key and contractSalt via deriveAccount
+ - Using getAuthenticatedCaller(secretKey, contractSalt) to find the caller's on-chain account
+ - Checking authorization via static isAuthorized(secretKey, targetAccount, contractSalt)
+ - Setting up witnesses with static createWitnesses(secretKey)
+ - Essential requirement: Deploying/initializing contract with derived account commitment for owner/admin accounts)
+
+## SDK API Reference
+(Detailed documentation of the client adapter methods, witnesses, and query functions)
+
+## Security & Privacy Considerations
+(Key zero-knowledge considerations, secret key handling, and witness protections)
+<<<END_FILE>>>
+
+<<<START_FILE:scripts/${cleanContractName}-install.sh>>>
+#!/usr/bin/env bash
+# Installation script for ${cleanContractName} dependencies
+npm install --save @midnight-ntwrk/compact-runtime
+<<<END_FILE>>>
 `;
 
             try {
-                const clientGen = await ai.models.generateContent({
-                    model,
-                    contents: clientPrompt,
-                    config: {
-                        temperature: 0.2,
-                    },
-                });
+                // Execute code & documentation generation in parallel for maximum speed and isolated token budgets
+                const [codeRes, docRes] = await Promise.all([
+                    ai.models.generateContent({
+                        model,
+                        contents: codeArtifactPrompt,
+                        config: {
+                            temperature: 0.2,
+                            maxOutputTokens: 16384,
+                        },
+                    }),
+                    ai.models.generateContent({
+                        model,
+                        contents: docArtifactPrompt,
+                        config: {
+                            temperature: 0.2,
+                            maxOutputTokens: 16384,
+                        },
+                    }),
+                ]);
 
-                const rawClientOutput = clientGen.text || '';
+                const rawCode = codeRes.text || '';
+                const rawDoc = docRes.text || '';
 
-                // Extract and save sdk.ts
-                const sdkMatch =
-                    rawClientOutput.match(/```(?:typescript|ts)?(?::src\/client\/[^\n]+)?\n([\s\S]*?import\s+[\s\S]*?export\s+class\s+[\s\S]*?)```/) ||
-                    rawClientOutput.match(/```(?:typescript|ts)\n([\s\S]*?export\s+class\s+[\s\S]*?)```/);
-                if (sdkMatch && sdkMatch[1].trim().length > 50) {
+                // Extract & save sdk.ts
+                const sdkCode = extractDelimitedContent(
+                    rawCode,
+                    `src/client/${cleanContractName}-sdk.ts`,
+                    [
+                        /```(?:typescript|ts)?(?::src\/client\/[^\n]+)?\n([\s\S]*?import\s+[\s\S]*?export\s+class\s+[\s\S]*?)```/,
+                        /```(?:typescript|ts)\n([\s\S]*?export\s+class\s+[\s\S]*?)```/,
+                    ]
+                );
+                if (sdkCode.length > 50) {
                     const sdkPath = path.join(workspaceRoot, 'src', 'client', `${cleanContractName}-sdk.ts`);
                     await fs.mkdir(path.dirname(sdkPath), { recursive: true });
-                    await fs.writeFile(sdkPath, sdkMatch[1].trim(), 'utf-8');
+                    await fs.writeFile(sdkPath, sdkCode, 'utf-8');
                 }
 
-                // Extract and save documentation (.md)
-                const docMatch =
-                    rawClientOutput.match(/```(?:markdown|md)?(?::docs\/[^\n]+)?\n([\s\S]*?#\s+[\s\S]*?)```/) ||
-                    rawClientOutput.match(/```markdown\n([\s\S]*?)```/);
-                if (docMatch && docMatch[1].trim().length > 50) {
-                    const docPath = path.join(workspaceRoot, 'docs', `${cleanContractName}-sdk.md`);
-                    await fs.mkdir(path.dirname(docPath), { recursive: true });
-                    await fs.writeFile(docPath, docMatch[1].trim(), 'utf-8');
-                }
-
-                // Extract and save example.ts
-                const exampleMatch =
-                    rawClientOutput.match(/```(?:typescript|ts)?(?::examples\/[^\n]+)?\n([\s\S]*?async\s+function\s+main[\s\S]*?)```/) ||
-                    rawClientOutput.match(/```(?:typescript|ts)\n([\s\S]*?main\(\)[\s\S]*?)```/);
-                if (exampleMatch && exampleMatch[1].trim().length > 50) {
+                // Extract & save example.ts
+                const exampleCode = extractDelimitedContent(
+                    rawCode,
+                    `examples/${cleanContractName}-example.ts`,
+                    [
+                        /```(?:typescript|ts)?(?::examples\/[^\n]+)?\n([\s\S]*?async\s+function\s+main[\s\S]*?)```/,
+                        /```(?:typescript|ts)\n([\s\S]*?main\(\)[\s\S]*?)```/,
+                    ]
+                );
+                if (exampleCode.length > 50) {
                     const examplePath = path.join(workspaceRoot, 'examples', `${cleanContractName}-example.ts`);
                     await fs.mkdir(path.dirname(examplePath), { recursive: true });
-                    await fs.writeFile(examplePath, exampleMatch[1].trim(), 'utf-8');
+                    await fs.writeFile(examplePath, exampleCode, 'utf-8');
                 }
 
-                // Extract and save install.sh
-                const installMatch =
-                    rawClientOutput.match(/```(?:bash|sh)?(?::scripts\/[^\n]+)?\n([\s\S]*?npm\s+install[\s\S]*?)```/) ||
-                    rawClientOutput.match(/```bash\n([\s\S]*?)```/);
-                if (installMatch && installMatch[1].trim().length > 10) {
+                // Extract & save docs.md
+                let docContent = extractDelimitedContent(
+                    rawDoc,
+                    `docs/${cleanContractName}-sdk.md`,
+                    [
+                        /```(?:markdown|md)?(?::docs\/[^\n]+)?\n([\s\S]*?#\s+[\s\S]*?)```/,
+                        /```markdown\n([\s\S]*?)```/,
+                    ]
+                );
+                if (!docContent && rawDoc.includes('# ')) {
+                    docContent = sanitizeExtracted(rawDoc);
+                }
+                if (docContent.length > 50) {
+                    const docPath = path.join(workspaceRoot, 'docs', `${cleanContractName}-sdk.md`);
+                    await fs.mkdir(path.dirname(docPath), { recursive: true });
+                    await fs.writeFile(docPath, docContent, 'utf-8');
+                }
+
+                // Extract & save install.sh
+                const installCode = extractDelimitedContent(
+                    rawDoc,
+                    `scripts/${cleanContractName}-install.sh`,
+                    [
+                        /```(?:bash|sh)?(?::scripts\/[^\n]+)?\n([\s\S]*?npm\s+install[\s\S]*?)```/,
+                        /```bash\n([\s\S]*?)```/,
+                    ]
+                );
+                if (installCode.length > 10) {
                     const installPath = path.join(workspaceRoot, 'scripts', `${cleanContractName}-install.sh`);
                     await fs.mkdir(path.dirname(installPath), { recursive: true });
-                    await fs.writeFile(installPath, installMatch[1].trim(), { encoding: 'utf-8', mode: 0o755 });
+                    await fs.writeFile(installPath, installCode, { encoding: 'utf-8', mode: 0o755 });
                 }
             } catch (artifactErr: any) {
                 console.warn('Artifact generation warning:', artifactErr.message);

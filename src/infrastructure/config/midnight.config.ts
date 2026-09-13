@@ -16,6 +16,10 @@ export const MIDNIGHT_CONFIG = {
 export interface DeploymentConfig {
     contractName?: string;
     contractAddress?: string;
+    contractSalt?: string;
+    owner?: string;
+    deployerSecretKey?: string;
+    deployerAddress?: string;
     networkId?: string;
     indexerUrl?: string;
     indexerWsUrl?: string;
@@ -66,6 +70,9 @@ export function generateDeploymentConfig(
     return {
         contractName: baseContractName,
         contractAddress: override?.contractAddress || DEFAULT_DEPLOYMENT_CONFIG.contractAddress,
+        ...(override?.contractSalt ? { contractSalt: override.contractSalt } : {}),
+        ...(override?.owner ? { owner: override.owner } : {}),
+        ...(override?.deployerAddress ? { deployerAddress: override.deployerAddress } : {}),
         networkId,
         indexerUrl,
         indexerWsUrl,

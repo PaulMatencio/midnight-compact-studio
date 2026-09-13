@@ -1,10 +1,15 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { findDeployedContract, deployContract } from '@midnight-ntwrk/midnight-js-contracts';
+import { findDeployedContract, deployContract, createUnprovenDeployTx } from '@midnight-ntwrk/midnight-js-contracts';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import { CompiledContract } from '@midnight-ntwrk/midnight-js-protocol/compact-js';
-import type { IContractGateway, DeployContractOptions } from '@/src/domain/ports/i-contract.gateway';
+import type {
+    IContractGateway,
+    DeployContractOptions,
+    PrepareDeployOptions,
+    RecordDeploymentOptions,
+} from '@/src/domain/ports/i-contract.gateway';
 import type { IWalletGateway } from '@/src/domain/ports/i-wallet.gateway';
 import type { IDeploymentStorage } from '@/src/domain/ports/i-deployment.storage';
 import { parseContractConstructorParams } from '@/src/infrastructure/contracts/contract-inspector.server';
@@ -12,6 +17,7 @@ import type {
     TransactionExecutionReceipt,
     DeploymentExecutionReceipt,
     ContractMessageSnapshot,
+    PreparedDeployData,
 } from '@/src/domain/entities/contract.entity';
 import {
     WalletNotSyncedError,
@@ -52,8 +58,11 @@ export function createWitnesses(contractType: string, walletCtx?: any): Record<s
         localSecretKey: ({ privateState }: any) => {
             let sk = privateState?.secretKey;
             if (!sk || !(sk instanceof Uint8Array) || sk.length !== 32) {
-                if (walletCtx?.shieldedSecretKeys?.coinPublicKey) {
-                    sk = crypto.createHash('sha256').update(walletCtx.shieldedSecretKeys.coinPublicKey).digest();
+                const unshieldedHex = walletCtx?.unshieldedKeystore?.getAddress?.()?.replace(/^0x/, '');
+                if (unshieldedHex && /^[0-9a-fA-F]{64}$/.test(unshieldedHex)) {
+                    sk = new Uint8Array(Buffer.from(unshieldedHex, 'hex'));
+                } else if (walletCtx?.shieldedSecretKeys?.coinPublicKey) {
+                    sk = new Uint8Array(walletCtx.shieldedSecretKeys.coinPublicKey);
                 } else {
                     sk = crypto.randomBytes(32);
                 }
@@ -93,6 +102,59 @@ export function createWitnesses(contractType: string, walletCtx?: any): Record<s
     });
 }
 
+/**
+ * Derives a deterministic 32-byte on-chain account commitment matching the contract's authenticate() circuit.
+ * Supports contractSalt for cross-contract replay protection.
+ */
+export function deriveAccountForContract(
+    ContractClass: any,
+    secretKey: Uint8Array,
+    contractSalt: string | Uint8Array = new Uint8Array(32)
+): Uint8Array {
+    const domainTag = new Uint8Array(32);
+    domainTag.set(Buffer.from('fungible-token:auth', 'utf-8'));
+
+    let saltBytes: Uint8Array;
+    if (typeof contractSalt === 'string') {
+        const cleanHex = contractSalt.startsWith('0x') ? contractSalt.slice(2) : contractSalt;
+        saltBytes = new Uint8Array(Buffer.from(cleanHex.padEnd(64, '0').slice(0, 64), 'hex'));
+    } else {
+        saltBytes = contractSalt;
+    }
+
+    try {
+        const dummyContract = new ContractClass({
+            localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)],
+        });
+        if (typeof (dummyContract as any)._persistentHash_1 === 'function') {
+            try {
+                return (dummyContract as any)._persistentHash_1([domainTag, saltBytes, secretKey]);
+            } catch {
+                return (dummyContract as any)._persistentHash_1([domainTag, { bytes: saltBytes }, secretKey]);
+            }
+        }
+        const proto = Object.getPrototypeOf(dummyContract);
+        const hashMethods = Object.getOwnPropertyNames(proto).filter((k) => k.startsWith('_persistentHash'));
+        for (const method of hashMethods) {
+            try {
+                const res = (dummyContract as any)[method]([domainTag, saltBytes, secretKey]);
+                if (res instanceof Uint8Array && res.length === 32) {
+                    return res;
+                }
+            } catch {}
+            try {
+                const res = (dummyContract as any)[method]([domainTag, { bytes: saltBytes }, secretKey]);
+                if (res instanceof Uint8Array && res.length === 32) {
+                    return res;
+                }
+            } catch {}
+        }
+    } catch (err) {
+        console.warn('Could not derive account via ContractClass dynamic persistentHash, falling back:', err);
+    }
+    return crypto.createHash('sha256').update(Buffer.concat([domainTag, saltBytes, secretKey])).digest();
+}
+
 export class MidnightContractAdapter implements IContractGateway {
     private compiledContractCache: any = null;
 
@@ -110,7 +172,8 @@ export class MidnightContractAdapter implements IContractGateway {
             throw new Error(`Compiled contract artifacts not found at contracts/managed/${contractType}. Please compile the contract first in the IDE.`);
         }
 
-        const contractUrl = pathToFileURL(contractJsPath).href;
+        const mtime = fs.statSync(contractJsPath).mtimeMs;
+        const contractUrl = `${pathToFileURL(contractJsPath).href}?t=${mtime}`;
         let contractModule: any;
         try {
             // Use runtime Function constructor to avoid Webpack/Turbopack static analysis and module mangling
@@ -259,86 +322,23 @@ export class MidnightContractAdapter implements IContractGateway {
         const walletCtx = await this.walletGateway.getOrCreateWalletContext(seed);
         await walletCtx.wallet.waitForSyncedState();
 
-        const { compiledContract, zkConfigPath } = await this.getContractArtifacts(contractType, walletCtx);
+        const { compiledContract, zkConfigPath, ContractClass } = await this.getContractArtifacts(contractType, walletCtx);
 
         const providers = createProviders(walletCtx, {
             privateStatePassword: password,
             zkConfigPath,
         });
 
-        // Resolve constructor arguments for the target contract
-        const constructorParams = parseContractConstructorParams(contractType);
-        const resolvedArgs: any[] = [];
-        const userArgs = options?.constructorArgs;
+        const { resolvedArgs, activeContractSalt, derivedOwner } = this.resolveConstructorArgs(
+            contractType,
+            ContractClass,
+            options?.constructorArgs,
+            options?.deployerAddress,
+            walletCtx
+        );
 
-        for (let i = 0; i < constructorParams.length; i++) {
-            const param = constructorParams[i];
-            const cleanName = param.name.replace(/^_+/, '');
-            let userVal: any = undefined;
-
-            if (Array.isArray(userArgs)) {
-                userVal = userArgs[i];
-            } else if (userArgs && typeof userArgs === 'object') {
-                userVal = userArgs[param.name] ?? userArgs[cleanName];
-            }
-
-            if (param.type === 'address' || param.compactType?.includes('Bytes') || param.description?.includes('Uint8Array')) {
-                if (userVal instanceof Uint8Array && userVal.length === 32) {
-                    resolvedArgs.push(userVal);
-                } else if (typeof userVal === 'string' && userVal.trim() && userVal !== 'deployer') {
-                    const val = userVal.trim();
-                    if (val.startsWith('mn_') || val.startsWith('midnight')) {
-                        try {
-                            const decoded = MidnightBech32m.parse(val).decode(UnshieldedAddress, getNetworkId());
-                            resolvedArgs.push(new Uint8Array(decoded.data));
-                        } catch {
-                            throw new InvalidInputError(`Invalid Midnight Bech32 address: ${val}`);
-                        }
-                    } else {
-                        const cleanHex = val.replace(/^0x/, '');
-                        if (/^[0-9a-fA-F]{64}$/.test(cleanHex)) {
-                            resolvedArgs.push(new Uint8Array(Buffer.from(cleanHex, 'hex')));
-                        } else {
-                            throw new InvalidInputError(
-                                `Constructor argument '${param.label}' must be a valid Midnight address (mn_addr_...) or 32-byte hex string. Received: ${userVal}`
-                            );
-                        }
-                    }
-                } else {
-                    // Default to deployer's unshielded address (32 bytes)
-                    if (walletCtx?.unshieldedKeystore?.getAddress) {
-                        const unshieldedHex = walletCtx.unshieldedKeystore.getAddress();
-                        resolvedArgs.push(new Uint8Array(Buffer.from(unshieldedHex, 'hex')));
-                    } else if (walletCtx?.shieldedSecretKeys?.coinPublicKey) {
-                        resolvedArgs.push(new Uint8Array(walletCtx.shieldedSecretKeys.coinPublicKey));
-                    } else {
-                        resolvedArgs.push(new Uint8Array(crypto.randomBytes(32)));
-                    }
-                }
-            } else if (param.type === 'number' || param.compactType?.includes('Uint') || param.compactType?.includes('Field')) {
-                if (typeof userVal === 'bigint') {
-                    resolvedArgs.push(userVal);
-                } else if (typeof userVal === 'number') {
-                    resolvedArgs.push(BigInt(userVal));
-                } else if (typeof userVal === 'string' && userVal.trim()) {
-                    resolvedArgs.push(BigInt(userVal.trim()));
-                } else {
-                    resolvedArgs.push(0n);
-                }
-            } else if (param.type === 'boolean') {
-                resolvedArgs.push(Boolean(userVal));
-            } else if (param.compactType?.startsWith('Maybe') || param.description?.startsWith('Maybe')) {
-                if (typeof userVal === 'object' && userVal !== null && 'is_some' in userVal) {
-                    resolvedArgs.push(userVal);
-                } else if (typeof userVal === 'string' && userVal.trim().length > 0) {
-                    resolvedArgs.push({ is_some: true, value: userVal.trim() });
-                } else {
-                    resolvedArgs.push({ is_some: false, value: '' });
-                }
-            } else {
-                resolvedArgs.push(userVal !== undefined ? userVal : '');
-            }
-        }
+        console.log(`[DeployAdapter] Starting deployment pipeline for '${contractType}'...`);
+        console.log(`[DeployAdapter] Resolved ${resolvedArgs.length} constructor arguments.`);
 
         const startTime = Date.now();
         const deployed = await deployContract(providers as any, {
@@ -348,27 +348,16 @@ export class MidnightContractAdapter implements IContractGateway {
             initialPrivateState: {},
         });
 
-        const deployPublicData = deployed.deployTxData.public as any;
-        const contractAddress = deployPublicData.contractAddress;
-        const txHash = deployPublicData.txHash || deployPublicData.txId || null;
-        const blockHeight = typeof deployPublicData.blockHeight === 'number' ? deployPublicData.blockHeight : null;
-        const durationMs = Date.now() - startTime;
+        const contractAddress = deployed.deployTxData.public.contractAddress;
+        const txHash = (deployed as any).deployTxData?.txHash || (deployed as any).txHash;
+        const blockHeight = (deployed as any).deployTxData?.blockHeight ?? null;
         const dustPaid = walletCtx.lastDustFee ? walletCtx.lastDustFee.toString() : '0';
+        const durationMs = Date.now() - startTime;
 
-        let owner: string | undefined = undefined;
-        for (let i = 0; i < constructorParams.length; i++) {
-            const param = constructorParams[i];
-            const pName = param.name.toLowerCase();
-            if (pName.includes('owner') || pName.includes('admin') || pName.includes('seller')) {
-                const arg = resolvedArgs[i];
-                if (arg instanceof Uint8Array || Buffer.isBuffer(arg)) {
-                    owner = Buffer.from(arg).toString('hex');
-                } else if (typeof arg === 'string') {
-                    owner = arg;
-                }
-                break;
-            }
-        }
+        console.log(`[DeployAdapter] Deployment succeeded in ${durationMs}ms! Contract Address: ${contractAddress}, Block: ${blockHeight}`);
+
+        const owner = derivedOwner;
+        const hasNonZeroSalt = activeContractSalt && !activeContractSalt.every(b => b === 0);
 
         await this.deploymentStorage.saveDeployment({
             contractAddress,
@@ -376,6 +365,8 @@ export class MidnightContractAdapter implements IContractGateway {
             deployerSeed: seed.trim(),
             deployedAt: new Date().toISOString(),
             ...(owner ? { owner } : {}),
+            ...(hasNonZeroSalt ? { contractSalt: Buffer.from(activeContractSalt).toString('hex') } : {}),
+            deployerAddress: options?.deployerAddress || walletCtx?.unshieldedKeystore?.getBech32Address?.()?.toString(),
         });
 
         const receipt: DeploymentExecutionReceipt = {
@@ -408,6 +399,328 @@ export class MidnightContractAdapter implements IContractGateway {
         }
 
         return receipt;
+    }
+
+    private resolveConstructorArgs(
+        contractType: string,
+        ContractClass: any,
+        userArgs?: Record<string, any> | any[],
+        explicitDeployerAddress?: string,
+        walletCtx?: any
+    ): { resolvedArgs: any[]; activeContractSalt: Uint8Array; derivedOwner?: string } {
+        const constructorParams = parseContractConstructorParams(contractType);
+        const resolvedArgs: any[] = [];
+
+        // Check if there is a contract salt parameter
+        let activeContractSalt: Uint8Array = new Uint8Array(32);
+        for (let i = 0; i < constructorParams.length; i++) {
+            const p = constructorParams[i];
+            const clean = p.name.replace(/^_+/, '').toLowerCase();
+            if (clean.includes('salt') || p.label?.toLowerCase().includes('salt')) {
+                let userVal: any = undefined;
+                if (Array.isArray(userArgs)) {
+                    userVal = userArgs[i];
+                } else if (userArgs && typeof userArgs === 'object') {
+                    userVal = userArgs[p.name] ?? userArgs[clean];
+                }
+                if (userVal instanceof Uint8Array && userVal.length === 32) {
+                    activeContractSalt = userVal;
+                } else if (typeof userVal === 'string' && /^[0-9a-fA-F]{64}$/.test(userVal.replace(/^0x/, ''))) {
+                    activeContractSalt = new Uint8Array(Buffer.from(userVal.replace(/^0x/, ''), 'hex'));
+                } else {
+                    activeContractSalt = new Uint8Array(crypto.randomBytes(32));
+                }
+                break;
+            }
+        }
+
+        // Determine deployer key bytes and addresses
+        let deployerKeyBytes: Uint8Array | undefined;
+        let deployerUnshieldedHex = '';
+        let deployerBech32 = '';
+
+        if (explicitDeployerAddress && explicitDeployerAddress.trim()) {
+            const trimmed = explicitDeployerAddress.trim();
+            if (trimmed.startsWith('mn_') || trimmed.startsWith('midnight')) {
+                try {
+                    const decoded = MidnightBech32m.parse(trimmed).decode(UnshieldedAddress, getNetworkId());
+                    deployerKeyBytes = new Uint8Array(decoded.data);
+                    deployerUnshieldedHex = Buffer.from(deployerKeyBytes).toString('hex').toLowerCase();
+                    deployerBech32 = trimmed.toLowerCase();
+                } catch {
+                    // ignore
+                }
+            } else {
+                const cleanHex = trimmed.replace(/^0x/, '').toLowerCase();
+                if (/^[0-9a-fA-F]{64}$/.test(cleanHex)) {
+                    deployerUnshieldedHex = cleanHex;
+                    deployerKeyBytes = new Uint8Array(Buffer.from(cleanHex, 'hex'));
+                    deployerBech32 = trimmed;
+                }
+            }
+        }
+
+        if (!deployerKeyBytes) {
+            deployerUnshieldedHex = walletCtx?.unshieldedKeystore?.getAddress
+                ? walletCtx.unshieldedKeystore.getAddress().toLowerCase().replace(/^0x/, '')
+                : '';
+            deployerBech32 = walletCtx?.unshieldedKeystore?.getBech32Address?.()?.toString()?.toLowerCase() || '';
+            deployerKeyBytes = deployerUnshieldedHex && /^[0-9a-fA-F]{64}$/.test(deployerUnshieldedHex)
+                ? new Uint8Array(Buffer.from(deployerUnshieldedHex, 'hex'))
+                : (walletCtx?.shieldedSecretKeys?.coinPublicKey
+                    ? new Uint8Array(walletCtx.shieldedSecretKeys.coinPublicKey)
+                    : new Uint8Array(32).fill(1));
+        }
+
+        let derivedOwner: string | undefined = undefined;
+
+        for (let i = 0; i < constructorParams.length; i++) {
+            const param = constructorParams[i];
+            const cleanName = param.name.replace(/^_+/, '');
+            let userVal: any = undefined;
+
+            if (Array.isArray(userArgs)) {
+                userVal = userArgs[i];
+            } else if (userArgs && typeof userArgs === 'object') {
+                userVal = userArgs[param.name] ?? userArgs[cleanName];
+            }
+
+            if (cleanName.toLowerCase().includes('salt') || param.label?.toLowerCase().includes('salt')) {
+                resolvedArgs.push(activeContractSalt);
+            } else if (param.type === 'address' || param.compactType?.includes('Bytes') || param.description?.includes('Uint8Array')) {
+                const isOwnerOrAuthParam = param.name.toLowerCase().includes('owner') ||
+                    param.name.toLowerCase().includes('admin') ||
+                    param.name.toLowerCase().includes('seller') ||
+                    param.label?.toLowerCase().includes('owner') ||
+                    param.description?.toLowerCase().includes('owner') ||
+                    cleanName.toLowerCase().includes('owner');
+
+                const isDeployerKeyword = !userVal || userVal === 'deployer' || userVal === 'auto';
+                const isDeployerWalletMatch = typeof userVal === 'string' && (
+                    userVal.toLowerCase().replace(/^0x/, '') === deployerUnshieldedHex ||
+                    userVal.toLowerCase() === deployerBech32
+                );
+
+                if (isOwnerOrAuthParam && (isDeployerKeyword || isDeployerWalletMatch)) {
+                    const derived = deriveAccountForContract(ContractClass, deployerKeyBytes, activeContractSalt);
+                    resolvedArgs.push(derived);
+                    derivedOwner = Buffer.from(derived).toString('hex');
+                } else if (userVal instanceof Uint8Array && userVal.length === 32) {
+                    if (isOwnerOrAuthParam) {
+                        const derived = deriveAccountForContract(ContractClass, userVal, activeContractSalt);
+                        resolvedArgs.push(derived);
+                        derivedOwner = Buffer.from(derived).toString('hex');
+                    } else {
+                        resolvedArgs.push(userVal);
+                    }
+                } else if (typeof userVal === 'string' && userVal.trim() && !isDeployerKeyword) {
+                    const val = userVal.trim();
+                    let targetKeyBytes: Uint8Array;
+                    if (val.startsWith('derive:')) {
+                        const customSkHex = val.replace('derive:', '').replace(/^0x/, '');
+                        targetKeyBytes = customSkHex.length === 64
+                            ? new Uint8Array(Buffer.from(customSkHex, 'hex'))
+                            : deployerKeyBytes;
+                    } else if (val.startsWith('mn_') || val.startsWith('midnight')) {
+                        try {
+                            const decoded = MidnightBech32m.parse(val).decode(UnshieldedAddress, getNetworkId());
+                            targetKeyBytes = new Uint8Array(decoded.data);
+                        } catch {
+                            throw new InvalidInputError(`Invalid Midnight Bech32 address: ${val}`);
+                        }
+                    } else {
+                        const cleanHex = val.replace(/^0x/, '');
+                        if (/^[0-9a-fA-F]{64}$/.test(cleanHex)) {
+                            targetKeyBytes = new Uint8Array(Buffer.from(cleanHex, 'hex'));
+                        } else {
+                            throw new InvalidInputError(
+                                `Constructor argument '${param.label}' must be a valid Midnight address (mn_addr_...), 32-byte hex string, or 'deployer'. Received: ${userVal}`
+                            );
+                        }
+                    }
+
+                    if (isOwnerOrAuthParam) {
+                        const derived = deriveAccountForContract(ContractClass, targetKeyBytes, activeContractSalt);
+                        resolvedArgs.push(derived);
+                        derivedOwner = Buffer.from(derived).toString('hex');
+                    } else {
+                        resolvedArgs.push(targetKeyBytes);
+                    }
+                } else if (isOwnerOrAuthParam) {
+                    const derived = deriveAccountForContract(ContractClass, deployerKeyBytes, activeContractSalt);
+                    resolvedArgs.push(derived);
+                    derivedOwner = Buffer.from(derived).toString('hex');
+                } else {
+                    resolvedArgs.push(deployerKeyBytes);
+                }
+            } else if (param.type === 'number' || param.compactType?.includes('Uint') || param.compactType?.includes('Field')) {
+                if (typeof userVal === 'bigint') {
+                    resolvedArgs.push(userVal);
+                } else if (typeof userVal === 'number') {
+                    resolvedArgs.push(BigInt(userVal));
+                } else if (typeof userVal === 'string' && userVal.trim()) {
+                    resolvedArgs.push(BigInt(userVal.trim()));
+                } else {
+                    resolvedArgs.push(0n);
+                }
+            } else if (param.type === 'boolean') {
+                resolvedArgs.push(Boolean(userVal));
+            } else if (param.compactType?.startsWith('Maybe') || param.description?.startsWith('Maybe')) {
+                if (typeof userVal === 'object' && userVal !== null && 'is_some' in userVal) {
+                    resolvedArgs.push(userVal);
+                } else if (typeof userVal === 'string' && userVal.trim().length > 0) {
+                    resolvedArgs.push({ is_some: true, value: userVal.trim() });
+                } else {
+                    resolvedArgs.push({ is_some: false, value: '' });
+                }
+            } else {
+                resolvedArgs.push(userVal !== undefined ? userVal : '');
+            }
+        }
+
+        return { resolvedArgs, activeContractSalt, derivedOwner };
+    }
+
+    async prepareDeploy(options: PrepareDeployOptions): Promise<PreparedDeployData> {
+        const contractType = options.contractType || 'hello-world';
+        const password = options?.privateStatePassword?.trim() || MIDNIGHT_CONFIG.privateStatePassword;
+        const startTime = Date.now();
+
+        console.log(`[DeployAdapter] Preparing deployment for '${contractType}' with Lace/Extension...`);
+
+        const effectiveSeed = options.seed?.trim() || process.env.WALLET_SEED?.trim() || process.env.MIDNIGHT_WALLET_SEED?.trim();
+        let walletCtx: any = null;
+        if (effectiveSeed) {
+            try {
+                walletCtx = await this.walletGateway.getOrCreateWalletContext(effectiveSeed);
+            } catch (e) {
+                console.warn('[DeployAdapter] Could not initialize wallet context from seed, using decoupled context:', e);
+            }
+        }
+        if (!walletCtx) {
+            const dummySeed = new Uint8Array(32);
+            walletCtx = {
+                shieldedSecretKeys: LedgerV8.ZswapSecretKeys.fromSeed(dummySeed),
+                dustSecretKey: LedgerV8.DustSecretKey.fromSeed(dummySeed),
+                unshieldedKeystore: {
+                    getBech32Address: () => options.deployerAddress || 'mn_addr_preprod_decoupled',
+                    getAddress: () => '00'.repeat(32),
+                },
+            };
+        }
+
+        const { compiledContract, zkConfigPath, ContractClass } = await this.getContractArtifacts(contractType, walletCtx);
+
+        const { resolvedArgs, activeContractSalt } = this.resolveConstructorArgs(
+            contractType,
+            ContractClass,
+            options?.constructorArgs,
+            options?.deployerAddress,
+            walletCtx
+        );
+
+        const providers = createProviders(walletCtx, {
+            privateStatePassword: password,
+            zkConfigPath,
+            accountId: options.deployerAddress,
+            shieldedCoinPublicKey: options.shieldedCoinPublicKey,
+            shieldedEncryptionPublicKey: options.shieldedEncryptionPublicKey,
+        });
+
+        const signingKey = CompactRuntime.sampleSigningKey();
+        console.log(`[DeployAdapter] Creating unproven deploy transaction for '${contractType}'...`);
+        const unprovenDeployTxData = await createUnprovenDeployTx(providers as any, {
+            compiledContract: compiledContract as any,
+            args: resolvedArgs,
+            signingKey,
+            initialPrivateState: {},
+        });
+
+        const contractAddress = unprovenDeployTxData.public.contractAddress;
+        console.log(`[DeployAdapter] Unproven deploy TX created. Target address: ${contractAddress}`);
+
+        console.log(`[DeployAdapter] Generating ZK proofs on proof server for '${contractType}'...`);
+        const proofStartTime = Date.now();
+        const provenTx = await providers.proofProvider.proveTx(unprovenDeployTxData.private.unprovenTx);
+        console.log(`[DeployAdapter] ZK proof generated in ${Date.now() - proofStartTime}ms!`);
+
+        const unsealedTxHex = Buffer.from(provenTx.serialize()).toString('hex');
+
+        try {
+            providers.privateStateProvider.setContractAddress(contractAddress);
+            await providers.privateStateProvider.set(`${contractType}State`, unprovenDeployTxData.private.initialPrivateState);
+            await providers.privateStateProvider.setSigningKey(contractAddress, unprovenDeployTxData.private.signingKey);
+        } catch (storageErr) {
+            console.warn('[DeployAdapter] Warning: failed to store initial private state:', storageErr);
+        }
+
+        const hasNonZeroSalt = activeContractSalt && !activeContractSalt.every(b => b === 0);
+        const contractSalt = hasNonZeroSalt ? Buffer.from(activeContractSalt).toString('hex') : undefined;
+
+        const durationMs = Date.now() - startTime;
+        console.log(`[DeployAdapter] Deployment prepared in ${durationMs}ms. Ready for Lace signature and fee balancing.`);
+
+        return {
+            unsealedTxHex,
+            contractAddress,
+            contractSalt,
+            contractType,
+            durationMs,
+        };
+    }
+
+    async recordDeployment(options: RecordDeploymentOptions): Promise<DeploymentExecutionReceipt> {
+        const {
+            contractAddress,
+            contractType,
+            txHash,
+            blockHeight,
+            deployerAddress,
+            contractSalt,
+            owner,
+            dustPaid = '0',
+            durationMs = 0,
+        } = options;
+
+        await this.deploymentStorage.saveDeployment({
+            contractAddress,
+            contractType,
+            deployedAt: new Date().toISOString(),
+            deployerAddress,
+            ...(owner ? { owner } : {}),
+            ...(contractSalt ? { contractSalt } : {}),
+        });
+
+        if (this.txHistoryStorage) {
+            try {
+                await this.txHistoryStorage.storeTxRecord({
+                    id: `deploy-${Date.now()}`,
+                    txHash: txHash || `deploy-${contractAddress.slice(0, 16)}`,
+                    contractAddress,
+                    contractType,
+                    txType: 'contract_deploy',
+                    blockHeight: blockHeight ?? null,
+                    message: `Contract Deployed: ${contractAddress.slice(0, 10)}... (via Lace)`,
+                    timestamp: new Date().toISOString(),
+                    dustPaid,
+                    durationMs,
+                });
+            } catch (e) {
+                console.warn('Failed to persist deploy tx record:', e);
+            }
+        }
+
+        return {
+            success: true,
+            contractAddress,
+            contractType,
+            txHash,
+            blockHeight: blockHeight ?? null,
+            dustPaid,
+            durationMs,
+            network: MIDNIGHT_CONFIG.networkId,
+            deployedAt: new Date().toISOString(),
+        };
     }
 
     async getContractState(contractAddress?: string): Promise<ContractMessageSnapshot> {

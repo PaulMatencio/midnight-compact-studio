@@ -1,0 +1,340 @@
+// SPDX-License-Identifier: MIT
+// Compact FungibleToken Contract - Optimized & Secured with Emergency Stop
+pragma language_version >= 0.23;
+
+import CompactStandardLibrary;
+
+// Ledger state
+export ledger _balances: Map<Bytes<32>, Uint<128>>;
+export ledger _allowances: Map<[Bytes<32>, Bytes<32>], Uint<128>>;
+export ledger _totalSupply: Uint<128>;
+export ledger _maxSupply: Uint<128>;
+export ledger _name: Opaque<"string">;
+export ledger _symbol: Opaque<"string">;
+export ledger _decimals: Uint<8>;
+export ledger owner: Bytes<32>;
+export ledger _contractSalt: Bytes<32>;
+
+// ============ NEW: Emergency Stop State ============
+export ledger _paused: Boolean;
+export ledger _emergencyPauser: Bytes<32>;  // Optional: separate pauser role
+
+// Private witness providing caller secret key
+witness localSecretKey(): Bytes<32>;
+
+/**
+ * Authenticates that the prover possesses the private secret key
+ * corresponding to the specified public identity/address.
+ * Bound to _contractSalt for cross-contract replay protection.
+ */
+circuit authenticate(account: Bytes<32>): [] {
+  const sk = localSecretKey();
+  const domainTag = pad(32, "fungible-token:auth");
+  const derivedAccount = persistentHash<[Bytes<32>, Bytes<32>, Bytes<32>]>([
+    domainTag,
+    _contractSalt,
+    sk
+  ]);
+  assert(derivedAccount == account, "FungibleToken: caller authorization failed");
+}
+
+// ============ NEW: Pause Modifiers ============
+circuit whenNotPaused(): [] {
+  assert(!_paused, "FungibleToken: contract is paused");
+}
+
+circuit whenPaused(): [] {
+  assert(_paused, "FungibleToken: contract is not paused");
+}
+
+circuit onlyOwner(account: Bytes<32>): [] {
+  authenticate(account);
+  assert(disclose(account) == owner, "FungibleToken: only owner can call this");
+}
+
+// ============ NEW: Optional - Only Pauser Role ============
+circuit onlyPauser(account: Bytes<32>): [] {
+  authenticate(account);
+  assert(disclose(account) == _emergencyPauser || disclose(account) == owner, 
+         "FungibleToken: only pauser or owner can call this");
+}
+
+constructor(
+  salt_: Bytes<32>,
+  initialOwner: Bytes<32>,
+  name_: Opaque<"string">,
+  symbol_: Opaque<"string">,
+  decimals_: Uint<8>,
+  maxSupply_: Uint<128>
+) {
+  const MAX_UINT128 = 340282366920938463463374607431768211455;
+  _contractSalt = disclose(salt_);
+  owner = disclose(initialOwner);
+  _name = disclose(name_);
+  _symbol = disclose(symbol_);
+  _decimals = disclose(decimals_);
+  _totalSupply = 0;
+  if (disclose(maxSupply_) == 0) {
+    _maxSupply = MAX_UINT128;
+  } else {
+    _maxSupply = disclose(maxSupply_);
+  }
+  
+  // ============ NEW: Initialize paused state ============
+  _paused = false;
+  _emergencyPauser = disclose(initialOwner); // Default to owner
+}
+
+// ============ Internal Ledger Helpers ============
+
+circuit balanceOf(account: Bytes<32>): Uint<128> {
+  if (disclose(!_balances.member(disclose(account)))) {
+    return 0;
+  }
+  return _balances.lookup(disclose(account));
+}
+
+circuit allowance(
+  ownerAccount: Bytes<32>,
+  spender: Bytes<32>
+): Uint<128> {
+  const allowanceKey: [Bytes<32>, Bytes<32>] = [disclose(ownerAccount), disclose(spender)];
+  if (disclose(!_allowances.member(allowanceKey))) {
+    return 0;
+  }
+  return _allowances.lookup(allowanceKey);
+}
+
+// ============ NEW: Pause Functions ============
+
+/**
+ * Pauses all token transfers, approvals, and minting/burning
+ * Can only be called by owner or designated pauser
+ */
+export circuit pause(caller: Bytes<32>): Boolean {
+  onlyPauser(caller);
+  whenNotPaused();
+  _paused = true;
+  return true;
+}
+
+/**
+ * Unpauses the contract
+ * Can only be called by owner or designated pauser
+ */
+export circuit unpause(caller: Bytes<32>): Boolean {
+  onlyPauser(caller);
+  whenPaused();
+  _paused = false;
+  return true;
+}
+
+/**
+ * Optional: Set a separate pauser role
+ * Only callable by owner
+ */
+export circuit setEmergencyPauser(caller: Bytes<32>, newPauser: Bytes<32>): Boolean {
+  onlyOwner(caller);
+  assert(!isZeroKey(newPauser), "FungibleToken: invalid pauser address");
+  _emergencyPauser = disclose(newPauser);
+  return true;
+}
+
+/*
+
+  Reallocate  blocked tokens 
+
+*/
+export circuit adminReallocate(
+  caller: Bytes<32>,
+  trappedAccount: Bytes<32>,
+  targetSpendableAccount: Bytes<32>,
+  amount: Uint<128>
+): Boolean {
+  onlyOwner(caller);
+  _transfer(trappedAccount, targetSpendableAccount, amount);
+  return true;
+}
+
+
+
+// ============ MODIFIED: Transfer with pause check ============
+export circuit transfer(
+  caller: Bytes<32>,
+  to: Bytes<32>,
+  value: Uint<128>
+): Boolean {
+  authenticate(caller);
+  whenNotPaused(); // ============ ADDED ============
+  _transfer(caller, to, value);
+  return true;
+}
+
+// ============ MODIFIED: Approve with pause check ============
+export circuit approve(
+  caller: Bytes<32>,
+  spender: Bytes<32>,
+  value: Uint<128>
+): Boolean {
+  authenticate(caller);
+  whenNotPaused(); // ============ ADDED ============
+  _approve(caller, spender, value);
+  return true;
+}
+
+// ============ MODIFIED: TransferFrom with pause check ============
+export circuit transferFrom(
+  caller: Bytes<32>,
+  fromAccount: Bytes<32>,
+  to: Bytes<32>,
+  value: Uint<128>
+): Boolean {
+  authenticate(caller);
+  whenNotPaused(); // ============ ADDED ============
+  _spendAllowance(fromAccount, caller, value);
+  _transfer(fromAccount, to, value);
+  return true;
+}
+
+// ============ MODIFIED: Mint with pause check ============
+export circuit mint(
+  to: Bytes<32>,
+  value: Uint<128>
+): Boolean {
+  authenticate(owner);
+  whenNotPaused(); // ============ ADDED ============
+  _mint(to, value);
+  return true;
+}
+
+// ============ MODIFIED: Burn with pause check ============
+export circuit burn(
+  caller: Bytes<32>,
+  value: Uint<128>
+): Boolean {
+  authenticate(caller);
+  whenNotPaused(); // ============ ADDED ============
+  _burn(caller, value);
+  return true;
+}
+
+// ============ Deriving the contract's account ============ 
+/*
+To identify the contract's own account in _balances 
+(which uses Bytes<32> keys), you can derive a deterministic account representation
+ from kernel.self():
+
+*/
+circuit _contractAccount(): Bytes<32> {
+  const domainTag = pad(32, "fungible-token:contract");
+  return persistentHash<[Bytes<32>, ContractAddress]>([
+    domainTag,
+    kernel.self()
+  ]);
+}
+
+
+// ============ NEW: Emergency Withdrawal (optional) ============
+/**
+ * Allow owner to withdraw tokens from the contract in case of emergency
+ * Only available when paused
+ */
+export circuit emergencyWithdraw(
+  caller: Bytes<32>,
+  token: ContractAddress,
+  amount: Uint<128>
+): Boolean {
+  onlyOwner(caller);
+  whenPaused();
+  
+  // Withdraw strictly to the registered contract owner / treasury, NOT an arbitrary `to` parameter
+  const fromAccount = _contractAccount();
+  const recipient = owner;
+  _transfer(fromAccount, recipient, amount);
+  
+  return true;
+}
+
+
+// Rest of the original contract remains the same...
+circuit _transfer(
+  fromAccount: Bytes<32>,
+  to: Bytes<32>,
+  value: Uint<128>
+): [] {
+  assert(!isZeroKey(fromAccount), "FungibleToken: invalid sender");
+  assert(!isZeroKey(to), "FungibleToken: invalid receiver");
+  if (disclose(fromAccount == to)) {
+    const bal = balanceOf(fromAccount);
+    assert(bal >= disclose(value), "FungibleToken: insufficient balance");
+    return;
+  }
+  _update(fromAccount, to, value);
+}
+
+circuit _update(
+  fromAccount: Bytes<32>,
+  to: Bytes<32>,
+  value: Uint<128>
+): [] {
+  if (disclose(isZeroKey(fromAccount))) {
+    assert(_maxSupply - _totalSupply >= disclose(value), "FungibleToken: supply overflow");
+    _totalSupply = (_totalSupply + disclose(value)) as Uint<128>;
+  } else {
+    const fromBal = balanceOf(fromAccount);
+    assert(fromBal >= disclose(value), "FungibleToken: insufficient balance");
+    _balances.insert(disclose(fromAccount), (fromBal - disclose(value)) as Uint<128>);
+  }
+
+  if (disclose(isZeroKey(to))) {
+    assert(_totalSupply >= disclose(value), "FungibleToken: supply underflow");
+    _totalSupply = (_totalSupply - disclose(value)) as Uint<128>;
+  } else {
+    const toBal = balanceOf(to);
+    assert(_maxSupply - toBal >= disclose(value), "FungibleToken: balance overflow");
+    _balances.insert(disclose(to), (toBal + disclose(value)) as Uint<128>);
+  }
+}
+
+circuit _mint(account: Bytes<32>, value: Uint<128>): [] {
+  assert(!isZeroKey(account), "FungibleToken: invalid receiver");
+  _update(zeroKey(), account, value);
+}
+
+circuit _burn(account: Bytes<32>, value: Uint<128>): [] {
+  assert(!isZeroKey(account), "FungibleToken: invalid sender");
+  _update(account, zeroKey(), value);
+}
+
+circuit _approve(
+  ownerAccount: Bytes<32>,
+  spender: Bytes<32>,
+  value: Uint<128>
+): [] {
+  assert(!isZeroKey(ownerAccount), "FungibleToken: invalid owner");
+  assert(!isZeroKey(spender), "FungibleToken: invalid spender");
+  const key: [Bytes<32>, Bytes<32>] = [disclose(ownerAccount), disclose(spender)];
+  _allowances.insert(key, disclose(value));
+}
+
+circuit _spendAllowance(
+  ownerAccount: Bytes<32>,
+  spender: Bytes<32>,
+  value: Uint<128>
+): [] {
+  const currentAllowance = allowance(ownerAccount, spender);
+  assert(currentAllowance >= disclose(value), "FungibleToken: insufficient allowance");
+ 
+  const MAX_UINT128 = 340282366920938463463374607431768211455;
+  if (disclose(currentAllowance < MAX_UINT128)) {
+    _approve(ownerAccount, spender, (currentAllowance - disclose(value)) as Uint<128>);
+  }
+}
+
+pure circuit isZeroKey(key: Bytes<32>): Boolean {
+  return key == default<Bytes<32>>;
+}
+
+pure circuit zeroKey(): Bytes<32> {
+  return default<Bytes<32>>;
+}

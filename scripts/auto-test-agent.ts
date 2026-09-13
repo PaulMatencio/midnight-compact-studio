@@ -122,8 +122,47 @@ async function main() {
     // Step 3: Generate & SAVE SDK, Docs, Examples, and Install Script
     console.log(`\n📦 ${bold('Step 2: Generating & Saving Client SDK, Documentation, Examples, and Install Script')}...`);
 
-    const clientPrompt = `
-Task: Generate a production-grade TypeScript client SDK, comprehensive technical documentation, a runnable example script, and an install shell script for this Midnight Compact smart contract.
+    const sanitizeExtracted = (raw: string): string => {
+        let clean = raw.trim();
+        if (clean.startsWith('```')) {
+            clean = clean.replace(/^```[^\r\n]*\r?\n/, '');
+            clean = clean.replace(/\r?\n```\s*$/, '');
+        }
+        return clean.trim();
+    };
+
+    const extractDelimitedContent = (
+        text: string,
+        targetFilePath: string,
+        fallbackPatterns: RegExp[] = []
+    ): string => {
+        const escaped = targetFilePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const tagRegex = new RegExp(`<<<START_FILE:${escaped}>>>([\\s\\S]*?)<<<END_FILE>>>`, 'i');
+        const tagMatch = text.match(tagRegex);
+        if (tagMatch && tagMatch[1].trim()) {
+            return sanitizeExtracted(tagMatch[1]);
+        }
+
+        const base = path.basename(targetFilePath).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const looseRegex = new RegExp(`<<<START_FILE:[^>]*${base}[^>]*>>>([\\s\\S]*?)<<<END_FILE>>>`, 'i');
+        const looseMatch = text.match(looseRegex);
+        if (looseMatch && looseMatch[1].trim()) {
+            return sanitizeExtracted(looseMatch[1]);
+        }
+
+        for (const pat of fallbackPatterns) {
+            const m = text.match(pat);
+            if (m && m[1] && m[1].trim()) {
+                return sanitizeExtracted(m[1]);
+            }
+        }
+
+        return '';
+    };
+
+    const codeArtifactPrompt = `
+Task: Generate the complete, production-grade TypeScript Client SDK class AND a runnable quickstart example script for the Midnight Compact smart contract "${targetContract}".
+
 Contract Name: ${targetContract}
 Contract Filename: ${targetContract}.compact
 
@@ -137,82 +176,159 @@ Generated TypeScript Type Definitions (.d.ts):
 ${dtsContent}
 \`\`\`
 
-Please output FOUR separate, clearly labeled code blocks with file target headers:
+OUTPUT FORMAT REQUIREMENT:
+Output the two files using the exact delimiter tags below. Do NOT wrap files in outer markdown backticks:
 
-1. SDK Implementation:
-\`\`\`typescript:src/client/${targetContract}-sdk.ts
-// Complete TypeScript SDK Adapter Class importing from '../../contracts/managed/${targetContract}/contract/index.js'
-\`\`\`
+<<<START_FILE:src/client/${targetContract}-sdk.ts>>>
+// Production-grade TypeScript SDK Client Adapter Class
+// Rules:
+// 1. Import from '@midnight-ntwrk/compact-runtime'
+// 2. Import contract artifacts strictly from '../../contracts/managed/${targetContract}/contract/index.js'
+// 3. Export typed PrivateState and Witnesses interfaces
+// 4. Export ${pascalName}SDK class with constructor, query methods, and typed circuit executors
+<<<END_FILE>>>
 
-2. SDK Documentation:
-\`\`\`markdown:docs/${targetContract}-sdk.md
-# Documentation for ${targetContract}
-\`\`\`
-
-3. Runnable Quickstart Example:
-\`\`\`typescript:examples/${targetContract}-example.ts
+<<<START_FILE:examples/${targetContract}-example.ts>>>
 /**
  * Quickstart Example: ${pascalName} Client SDK
  * How to run: npx tsx examples/${targetContract}-example.ts
  */
+// Complete runnable TypeScript script importing from '../src/client/${targetContract}-sdk.js'
+<<<END_FILE>>>
+`;
+
+    const docArtifactPrompt = `
+Task: Generate comprehensive technical documentation and an installation script for the Midnight Compact smart contract "${targetContract}".
+
+Contract Name: ${targetContract}
+Contract Filename: ${targetContract}.compact
+
+Compact Contract Source Code:
+\`\`\`compact
+${compactCode}
 \`\`\`
 
-4. Installation Shell Script:
-\`\`\`bash:scripts/${targetContract}-install.sh
-#!/usr/bin/env bash
+Generated TypeScript Type Definitions (.d.ts):
+\`\`\`typescript
+${dtsContent}
 \`\`\`
+
+OUTPUT FORMAT REQUIREMENT:
+Output the two files using the exact delimiter tags below:
+
+<<<START_FILE:docs/${targetContract}-sdk.md>>>
+# Technical Documentation: ${targetContract} SDK
+
+## Overview
+(Deep architectural description of the contract, its purpose, state model, and privacy boundaries)
+
+## Contract State Architecture
+(Complete schema of public ledger state, data types, and access controls)
+
+## Zero-Knowledge Circuits & Methods
+(Comprehensive table and descriptions of all circuits, parameters, preconditions, and assertions)
+
+## SDK API Reference
+(Detailed documentation of the client adapter methods, witnesses, and query functions)
+
+## Security & Privacy Considerations
+(Key zero-knowledge considerations, secret key handling, and witness protections)
+<<<END_FILE>>>
+
+<<<START_FILE:scripts/${targetContract}-install.sh>>>
+#!/usr/bin/env bash
+# Installation script for ${targetContract} dependencies
+npm install --save @midnight-ntwrk/compact-runtime
+<<<END_FILE>>>
 `;
 
     try {
-        const clientRes = await ai.models.generateContent({
-            model: 'gemini-3.7-flash',
-            contents: clientPrompt,
-            config: { temperature: 0.2 },
-        });
+        const [codeRes, docRes] = await Promise.all([
+            ai.models.generateContent({
+                model: 'gemini-3.7-flash',
+                contents: codeArtifactPrompt,
+                config: {
+                    temperature: 0.2,
+                    maxOutputTokens: 16384,
+                },
+            }),
+            ai.models.generateContent({
+                model: 'gemini-3.7-flash',
+                contents: docArtifactPrompt,
+                config: {
+                    temperature: 0.2,
+                    maxOutputTokens: 16384,
+                },
+            }),
+        ]);
 
-        const rawClient = clientRes.text || '';
+        const rawCode = codeRes.text || '';
+        const rawDoc = docRes.text || '';
 
         // Save sdk.ts
-        const sdkMatch =
-            rawClient.match(/```(?:typescript|ts)?(?::src\/client\/[^\n]+)?\n([\s\S]*?import\s+[\s\S]*?export\s+class\s+[\s\S]*?)```/) ||
-            rawClient.match(/```(?:typescript|ts)\n([\s\S]*?export\s+class\s+[\s\S]*?)```/);
-        if (sdkMatch && sdkMatch[1].trim().length > 50) {
+        const sdkCode = extractDelimitedContent(
+            rawCode,
+            `src/client/${targetContract}-sdk.ts`,
+            [
+                /```(?:typescript|ts)?(?::src\/client\/[^\n]+)?\n([\s\S]*?import\s+[\s\S]*?export\s+class\s+[\s\S]*?)```/,
+                /```(?:typescript|ts)\n([\s\S]*?export\s+class\s+[\s\S]*?)```/,
+            ]
+        );
+        if (sdkCode.length > 50) {
             const sdkPath = path.join(workspaceRoot, 'src', 'client', `${targetContract}-sdk.ts`);
             await fs.mkdir(path.dirname(sdkPath), { recursive: true });
-            await fs.writeFile(sdkPath, sdkMatch[1].trim(), 'utf-8');
+            await fs.writeFile(sdkPath, sdkCode, 'utf-8');
             console.log(green(`✔ Saved SDK -> ${sdkPath}`));
         }
 
         // Save doc
-        const docMatch =
-            rawClient.match(/```(?:markdown|md)?(?::docs\/[^\n]+)?\n([\s\S]*?#\s+[\s\S]*?)```/) ||
-            rawClient.match(/```markdown\n([\s\S]*?)```/);
-        if (docMatch && docMatch[1].trim().length > 50) {
+        let docContent = extractDelimitedContent(
+            rawDoc,
+            `docs/${targetContract}-sdk.md`,
+            [
+                /```(?:markdown|md)?(?::docs\/[^\n]+)?\n([\s\S]*?#\s+[\s\S]*?)```/,
+                /```markdown\n([\s\S]*?)```/,
+            ]
+        );
+        if (!docContent && rawDoc.includes('# ')) {
+            docContent = sanitizeExtracted(rawDoc);
+        }
+        if (docContent.length > 50) {
             const docPath = path.join(workspaceRoot, 'docs', `${targetContract}-sdk.md`);
             await fs.mkdir(path.dirname(docPath), { recursive: true });
-            await fs.writeFile(docPath, docMatch[1].trim(), 'utf-8');
+            await fs.writeFile(docPath, docContent, 'utf-8');
             console.log(green(`✔ Saved Documentation -> ${docPath}`));
         }
 
         // Save example
-        const exampleMatch =
-            rawClient.match(/```(?:typescript|ts)?(?::examples\/[^\n]+)?\n([\s\S]*?async\s+function\s+main[\s\S]*?)```/) ||
-            rawClient.match(/```(?:typescript|ts)\n([\s\S]*?main\(\)[\s\S]*?)```/);
-        if (exampleMatch && exampleMatch[1].trim().length > 50) {
+        const exampleCode = extractDelimitedContent(
+            rawCode,
+            `examples/${targetContract}-example.ts`,
+            [
+                /```(?:typescript|ts)?(?::examples\/[^\n]+)?\n([\s\S]*?async\s+function\s+main[\s\S]*?)```/,
+                /```(?:typescript|ts)\n([\s\S]*?main\(\)[\s\S]*?)```/,
+            ]
+        );
+        if (exampleCode.length > 50) {
             const examplePath = path.join(workspaceRoot, 'examples', `${targetContract}-example.ts`);
             await fs.mkdir(path.dirname(examplePath), { recursive: true });
-            await fs.writeFile(examplePath, exampleMatch[1].trim(), 'utf-8');
+            await fs.writeFile(examplePath, exampleCode, 'utf-8');
             console.log(green(`✔ Saved Quickstart Example -> ${examplePath}`));
         }
 
         // Save install.sh
-        const installMatch =
-            rawClient.match(/```(?:bash|sh)?(?::scripts\/[^\n]+)?\n([\s\S]*?npm\s+install[\s\S]*?)```/) ||
-            rawClient.match(/```bash\n([\s\S]*?)```/);
-        if (installMatch && installMatch[1].trim().length > 10) {
+        const installCode = extractDelimitedContent(
+            rawDoc,
+            `scripts/${targetContract}-install.sh`,
+            [
+                /```(?:bash|sh)?(?::scripts\/[^\n]+)?\n([\s\S]*?npm\s+install[\s\S]*?)```/,
+                /```bash\n([\s\S]*?)```/,
+            ]
+        );
+        if (installCode.length > 10) {
             const installPath = path.join(workspaceRoot, 'scripts', `${targetContract}-install.sh`);
             await fs.mkdir(path.dirname(installPath), { recursive: true });
-            await fs.writeFile(installPath, installMatch[1].trim(), { encoding: 'utf-8', mode: 0o755 });
+            await fs.writeFile(installPath, installCode, { encoding: 'utf-8', mode: 0o755 });
             console.log(green(`✔ Saved Install Script -> ${installPath}`));
         }
     } catch (artifactErr: any) {
@@ -266,22 +382,60 @@ Rules:
 
 3. Dynamic persistentHash resolution:
    \`\`\`typescript
-   const dummyAddressBytes = Uint8Array.from(Buffer.from(dummyContractAddress, 'hex'));
+   const dummySalt = new Uint8Array(32).fill(7);
    const helperContract = new Contract({ localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)] });
    const proto = Object.getPrototypeOf(helperContract);
    const hashMethods = Object.getOwnPropertyNames(proto).filter((k) => k.startsWith('_persistentHash'));
-   const accountHashMethod = hashMethods.find((method) => {
-     try {
-       const t1 = (helperContract as any)[method]([domainTagAuth, { bytes: dummyAddressBytes }, createKey(1)]);
-       const t2 = (helperContract as any)[method]([domainTagAuth, { bytes: dummyAddressBytes }, createKey(2)]);
-       return t1 instanceof Uint8Array && t2 instanceof Uint8Array && Buffer.from(t1).compare(Buffer.from(t2)) !== 0;
-     } catch { return false; }
-   }) || '_persistentHash_0';
+   let accountHashMethod = '_persistentHash_1';
+   let passWrappedObject = false;
 
-   const deriveAccount = (sk: Uint8Array): Uint8Array => {
-     return (helperContract as any)[accountHashMethod]([domainTagAuth, { bytes: dummyAddressBytes }, sk]);
+   for (const method of hashMethods) {
+     try {
+       const t1 = (helperContract as any)[method]([domainTagAuth, dummySalt, createKey(1)]);
+       const t2 = (helperContract as any)[method]([domainTagAuth, dummySalt, createKey(2)]);
+       if (t1 instanceof Uint8Array && t2 instanceof Uint8Array && Buffer.from(t1).compare(Buffer.from(t2)) !== 0) {
+         accountHashMethod = method;
+         passWrappedObject = false;
+         break;
+       }
+     } catch {}
+     try {
+       const t1 = (helperContract as any)[method]([domainTagAuth, { bytes: dummySalt }, createKey(1)]);
+       const t2 = (helperContract as any)[method]([domainTagAuth, { bytes: dummySalt }, createKey(2)]);
+       if (t1 instanceof Uint8Array && t2 instanceof Uint8Array && Buffer.from(t1).compare(Buffer.from(t2)) !== 0) {
+         accountHashMethod = method;
+         passWrappedObject = true;
+         break;
+       }
+     } catch {}
+   }
+
+   const deriveAccount = (sk: Uint8Array, salt: Uint8Array = CONTRACT_SALT): Uint8Array => {
+     const saltArg = passWrappedObject ? { bytes: salt } : salt;
+     return (helperContract as any)[accountHashMethod]([domainTagAuth, saltArg, sk]);
    };
    \`\`\`
+
+4. Public ledger state vs Exported Circuits (NO GETTER CIRCUITS):
+   - In Compact contracts, public ledger variables (_balances, _allowances, _totalSupply, _maxSupply, _name, _symbol, _decimals, _paused, _contractSalt) are queried directly via \`ledger(circuitContext.currentQueryContext.state)\`!
+   - ABSOLUTELY NEVER call \`contract.circuits.balanceOf\`, \`contract.circuits.allowance\`, \`contract.circuits.totalSupply\`, \`contract.circuits.maxSupply\`, \`contract.circuits.paused\`, \`contract.circuits.name\`, \`contract.circuits.symbol\`, \`contract.circuits.decimals\`, or \`contract.circuits.contractSalt\`! These circuits do NOT exist on \`contract.circuits\`.
+   - DO NOT create tests called "exposes getter circuits".
+   - Use direct ledger helpers:
+     \`\`\`typescript
+     const getLedger = () => ledger(circuitContext.currentQueryContext.state);
+     const getBalance = (account: Uint8Array): bigint => {
+       const l = getLedger();
+       return l._balances.member(account) ? l._balances.lookup(account) : 0n;
+     };
+     const getAllowance = (owner: Uint8Array, spender: Uint8Array): bigint => {
+       const l = getLedger();
+       const key: [Uint8Array, Uint8Array] = [owner, spender];
+       return l._allowances.member(key) ? l._allowances.lookup(key) : 0n;
+     };
+     \`\`\`
+
+5. Constructor & Initial State:
+   - Always match constructor arguments: if constructor takes \`(salt_: Bytes<32>, initialOwner: Bytes<32>, ...)\`, pass \`CONTRACT_SALT\` first: \`contract.initialState(constructorCtx, CONTRACT_SALT, initialOwner, ...)\`.
 
 Contract Compact Code:
 \`\`\`compact

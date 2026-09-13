@@ -1,23 +1,20 @@
-┌─────────────────────────────────────────────────────────┐
-                  │                 FungibleTokenV22                        │
-                  │                                                         │
-                  │  Public Ledger State:                                   │
-                  │   • _balances: Map<Bytes<32>, Uint<128>>                │
-                  │   • _allowances: Map<[Bytes<32>, Bytes<32>], Uint<128>> │
-                  │   • _totalSupply / _maxSupply: Uint<128>                │
-                  │   • _name / _symbol: Opaque<"string">                   │
-                  │   • _decimals: Uint<8>                                  │
-                  │   • owner / _emergencyPauser: Bytes<32>                 │
-                  │   • _paused: Boolean                                    │
-                  └─────────────────────────┬───────────────────────────────┘
-                                            │
-                Off-Chain ZK Proof          │ On-Chain State Transition
-                Generation                  ▼
-    ┌───────────────────────────┐    ┌─────────────────────────────────────────┐
-    │     Private Witness       │    │            Circuit Execution            │
-    │  localSecretKey():        │───►│  authenticate(account):                 │
-    │    Bytes<32>              │    │    persistentHash([tag, self(), sk])    │
-    │                           │    │    == account                           │
-    │  (Never disclosed on-chain│    │  whenNotPaused() / onlyOwner()          │
-    │   or sent over network)   │    │  disclose(...) public state updates     │
-    └───────────────────────────┘    └─────────────────────────────────────────┘
++-------------------------------------------------------------------------+
+|                       FungibleTokenV22 Contract                         |
++-------------------------------------------------------------------------+
+| Public Ledger State                                                     |
+|  - _balances: Map<Bytes<32>, Uint<128>>                                 |
+|  - _allowances: Map<[Bytes<32>, Bytes<32>], Uint<128>>                  |
+|  - _totalSupply, _maxSupply: Uint<128>                                  |
+|  - _name, _symbol: Opaque<"string">                                     |
+|  - _decimals: Uint<8>                                                   |
+|  - owner, _emergencyPauser: Bytes<32>                                   |
+|  - _paused: Boolean                                                     |
++-------------------------------------------------------------------------+
+                                   ▲
+                                   │ (Verifies Proof & Updates State)
++-------------------------------------------------------------------------+
+| Zero-Knowledge Proving Circuit (Client-side ZK Runtime)                 |
+|  - localSecretKey() [Witness]                                           |
+|  - authenticate(caller) -> persistentHash(domainTag, self, sk) == caller|
+|  - Circuit execution: transfer, mint, burn, pause, approve, etc.        |
++-------------------------------------------------------------------------+

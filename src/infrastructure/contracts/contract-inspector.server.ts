@@ -77,7 +77,12 @@ export function parseContractConstructorParams(contractName: string): CircuitPar
         let type: 'string' | 'number' | 'boolean' | 'address' = 'string';
         let defaultValue: any = '';
 
-        if (tsType === 'Uint8Array' || compactType.includes('Bytes')) {
+        const isSaltParam = strippedName.toLowerCase().includes('salt') || rawParamName.toLowerCase().includes('salt');
+
+        if (isSaltParam) {
+            type = 'string';
+            defaultValue = '';
+        } else if (tsType === 'Uint8Array' || compactType.includes('Bytes')) {
             type = 'address';
             defaultValue = 'deployer';
         } else if (tsType === 'bigint' || compactType.includes('Uint') || compactType.includes('Field')) {
@@ -100,13 +105,15 @@ export function parseContractConstructorParams(contractName: string): CircuitPar
             label,
             description: compactType,
             placeholder:
-                type === 'address'
+                isSaltParam
+                    ? 'Leave empty for auto-generated cryptographic salt (or 32-byte hex)'
+                    : type === 'address'
                     ? '32-byte hex or leave empty for deployer key'
                     : type === 'number'
                     ? '0'
                     : '',
             defaultValue,
-            required: type !== 'boolean' && !compactType.startsWith('Maybe'),
+            required: !isSaltParam && type !== 'boolean' && !compactType.startsWith('Maybe'),
         });
     }
 

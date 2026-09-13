@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Terminal as TermIcon, Play, Trash2, HelpCircle } from 'lucide-react';
+import { formatDustFee } from '@/src/lib/dust-utils';
 
 interface WebTerminalProps {
   seed: string;
@@ -125,7 +126,7 @@ export const WebTerminal: React.FC<WebTerminalProps> = ({
         addLine(`   Transaction Hash: ${data.data.txHash}`, 'info');
         addLine(`   Block Height: #${data.data.blockHeight}`, 'info');
         if (data.data.dustPaid && data.data.dustPaid !== '0') {
-          addLine(`   DUST Gas Used: ${BigInt(data.data.dustPaid).toLocaleString()} DUST`, 'warning');
+          addLine(`   DUST Gas Used: ${formatDustFee(data.data.dustPaid)}`, 'warning');
         }
         onRefreshState();
       } catch (err: any) {
