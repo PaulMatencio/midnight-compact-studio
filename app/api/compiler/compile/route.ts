@@ -166,11 +166,13 @@ export async function POST(req: NextRequest) {
         let stdout = '';
         let stderr = '';
         let exitCode = 0;
+        const timeoutMs = skipZk ? 60000 : 300000;
 
         try {
+            console.log(`[Compiler API] Executing: ${compileCmd}`);
             const execResult = await execAsync(compileCmd, {
                 cwd: workspaceRoot,
-                timeout: 30000,
+                timeout: timeoutMs,
                 env: {
                     ...process.env,
                     PATH: `${process.env.PATH}:/home/paul/.local/bin:/usr/local/bin`,
@@ -178,10 +180,16 @@ export async function POST(req: NextRequest) {
             });
             stdout = execResult.stdout || '';
             stderr = execResult.stderr || '';
+            console.log(`[Compiler API] Compilation succeeded in ${Date.now() - startTime}ms`);
         } catch (execError: any) {
             exitCode = execError.code || 1;
             stdout = execError.stdout || '';
             stderr = execError.stderr || execError.message || '';
+
+            if (execError.killed || execError.signal === 'SIGTERM') {
+                stderr = `Compilation timed out after ${timeoutMs / 1000}s. Generating cryptographic proving keys for ${safeFilename} requires intensive computation. Tip: Check 'Fast Mode (--skip-zk)' in the top toolbar to compile circuits and TypeScript bindings in ~1-2 seconds.`;
+            }
+            console.warn(`[Compiler API] Compilation exited with code ${exitCode}:`, stderr);
         }
 
         const combinedOutput = `${stdout}\n${stderr}`.trim();

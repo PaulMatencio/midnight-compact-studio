@@ -286,6 +286,17 @@ async function collectContractArtifacts(baseContractName: string): Promise<{
         }
     } catch {}
 
+    // 3b. Managed Cryptographic Proving Keys (.prover & .verifier)
+    const managedKeysDir = path.join(rootDir, 'contracts', 'managed', baseContractName, 'keys');
+    try {
+        const files = await fs.readdir(managedKeysDir);
+        for (const file of files) {
+            const diskPath = path.join(managedKeysDir, file);
+            artifacts.push({ zipPath: `keys/${file}`, diskPath });
+            detectedFiles.push(`keys/${file}`);
+        }
+    } catch {}
+
     // 4. Client SDK Adapter & Type Definitions
     try {
         const clientDir = path.join(rootDir, 'src', 'client');

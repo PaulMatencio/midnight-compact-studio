@@ -52,6 +52,8 @@ interface AiCopilotPanelProps {
     onSwitchTab?: (tab: string) => void;
     onRunTests?: () => void;
     isRunningTests?: boolean;
+    selectedModel?: string;
+    onSelectModel?: (model: string) => void;
 }
 
 export function AiCopilotPanel({
@@ -65,6 +67,8 @@ export function AiCopilotPanel({
     onSwitchTab,
     onRunTests,
     isRunningTests = false,
+    selectedModel: propSelectedModel,
+    onSelectModel,
 }: AiCopilotPanelProps) {
     const toast = useToast();
     const [isMounted, setIsMounted] = useState<boolean>(false);
@@ -90,7 +94,7 @@ Ask a question below or click one of the quick actions to get started!`,
     const [abortController, setAbortController] = useState<AbortController | null>(null);
 
     const [apiKey, setApiKey] = useState<string>('');
-    const [selectedModel, setSelectedModel] = useState<string>('gemini-3.7-flash');
+    const [selectedModel, setSelectedModel] = useState<string>(propSelectedModel || 'gemini-3.7-flash');
     const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
     const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
 
@@ -99,6 +103,13 @@ Ask a question below or click one of the quick actions to get started!`,
     const [agentStatus, setAgentStatus] = useState<string>('');
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
+
+    // Sync external model prop when changed
+    useEffect(() => {
+        if (propSelectedModel && propSelectedModel !== selectedModel) {
+            setSelectedModel(propSelectedModel);
+        }
+    }, [propSelectedModel]);
 
     // Restore saved settings & chat history once mounted on client
     useEffect(() => {
@@ -109,7 +120,10 @@ Ask a question below or click one of the quick actions to get started!`,
             const savedMessages = localStorage.getItem('midnight_ide_copilot_messages');
 
             if (savedKey) setApiKey(savedKey);
-            if (savedModel) setSelectedModel(savedModel);
+            if (!propSelectedModel && savedModel) {
+                setSelectedModel(savedModel);
+                onSelectModel?.(savedModel);
+            }
             if (savedMessages) {
                 const parsed = JSON.parse(savedMessages);
                 if (Array.isArray(parsed) && parsed.length > 0) {
@@ -155,6 +169,7 @@ Ask a question below or click one of the quick actions to get started!`,
         } catch {
             // Ignore
         }
+        onSelectModel?.(model);
     };
 
     // Scroll to bottom on new messages
@@ -1272,7 +1287,8 @@ Ask a question below or click one of the quick actions to get started!`,
                                 onChange={(e) => saveModel(e.target.value)}
                                 className="rounded-lg bg-midnight-950 px-2 py-1 text-xs text-slate-200 border border-white/10 focus:outline-none"
                             >
-                                <option value="gemini-3.7-flash">Gemini 3.7 Flash (Recommended)</option>
+                                <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
+                                <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
                                 <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
                             </select>
                         </div>

@@ -282,9 +282,33 @@ Provide the complete, strongly-typed TypeScript SDK file (intended for \`src/cli
      - \`public getAuthenticatedCaller(secretKey: Uint8Array | string, contractSalt?: string | Uint8Array): Uint8Array\` returning the caller's derived on-chain account.
      - \`public static isAuthorized(secretKey: Uint8Array | string, targetAccount: Uint8Array | string, contractSalt: string | Uint8Array): boolean\` to verify if a secret key matches a target on-chain account.
      - \`public static createWitnesses<PS extends ${pascalName}PrivateState = ${pascalName}PrivateState>(secretKey: Uint8Array | string): Witnesses<PS>\` returning default witnesses configured with the caller's secret key (supplying \`[context.privateState, context.privateState?.secretKey ?? skBytes]\` for authentication witnesses).
-   - Type-safe circuit execution methods managing circuit contexts. (NOTE: Circuits with no return value in Compact return \`CircuitResults<PS, []>\` with the unit empty tuple \`[]\`, NOT \`void\`).
-   - Strongly-typed ledger state query helper: \`queryLedgerStateFromRaw(rawState: StateValue | ChargedState | unknown): ${pascalName}LedgerState { return ledger(rawState as StateValue | ChargedState); }\`.
-   - Comprehensive TSDoc inline comments.
+${code.includes('_multisig') || code.includes('SchnorrSignature') || code.includes('getSchnorrReduction') ? `
+    - **Threshold Multi-Sig & Schnorr Verification Support**:
+      - Re-export type \`SchnorrSignature = { announcement: JubjubPoint; response: bigint };\` and import \`type { JubjubPoint }\` from \`@midnight-ntwrk/compact-runtime\`.
+      - **CRITICAL**: The contract requires the witness \`getSchnorrReduction(challengeHash: bigint): [PS, [bigint, bigint]]\`. Implement this in \`createWitnesses\`:
+        \`\`\`typescript
+        getSchnorrReduction: (context: WitnessContext<ContractLedger, PS>, challengeHash: bigint): [PS, [bigint, bigint]] => {
+          const TWO_248 = 1n << 248n;
+          const q = challengeHash / TWO_248;
+          const r = challengeHash % TWO_248;
+          return [context.privateState, [q, r]];
+        },
+        \`\`\`
+      - Provide domain-separated operation digest builders:
+        - \`calculateMintDigest(contractAddress: string | Uint8Array, nonce: bigint | number, to: Uint8Array | string, amount: bigint | number): Uint8Array\`
+        - \`calculateBurnDigest(contractAddress: string | Uint8Array, nonce: bigint | number, account: Uint8Array | string, amount: bigint | number): Uint8Array\`
+        - \`calculateSetEmergencyPauserDigest(contractAddress: string | Uint8Array, nonce: bigint | number, newPauser: Uint8Array | string): Uint8Array\`
+      - Provide multi-sig inspection methods:
+        - \`getMultisigNonce(context: CircuitContext<PS>): CircuitResults<PS, bigint>\`
+        - \`getMultisigThreshold(context: CircuitContext<PS>): CircuitResults<PS, bigint>\`
+        - \`getMultisigSignerCount(context: CircuitContext<PS>): CircuitResults<PS, bigint>\`
+        - \`isMultisigSigner(context: CircuitContext<PS>, commitment: Uint8Array | string): CircuitResults<PS, boolean>\`
+        - \`calculateSignerCommitment(pk: JubjubPoint, salt?: Uint8Array | string): Uint8Array\` (using \`pureCircuits.calculateSignerCommitment\`).
+      - Governed circuits (\`mint\`, \`burn\`, \`setEmergencyPauser\`) take threshold arrays: \`pubkeys: JubjubPoint[]\` and \`signatures: SchnorrSignature[]\`.
+` : ''}
+    - Type-safe circuit execution methods managing circuit contexts. (NOTE: Circuits with no return value in Compact return \`CircuitResults<PS, []>\` with the unit empty tuple \`[]\`, NOT \`void\`).
+    - Strongly-typed ledger state query helper: \`queryLedgerStateFromRaw(rawState: StateValue | ChargedState | unknown): ${pascalName}LedgerState { return ledger(rawState as StateValue | ChargedState); }\`.
+    - Comprehensive TSDoc inline comments.
 5. Exports both the class and SDK alias:
    \`export { ${pascalName}Client as ${pascalName}SDK };\`
 `;

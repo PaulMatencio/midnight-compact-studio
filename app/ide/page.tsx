@@ -38,6 +38,7 @@ import {
     FolderTree,
     AlertTriangle,
     PackageCheck,
+    ChevronDown,
 } from 'lucide-react';
 import type { OnMount } from '@monaco-editor/react';
 import { Breadcrumbs } from '@/components/Breadcrumbs';
@@ -103,6 +104,25 @@ export default function CompactIdePage() {
     const [isExplorerOpen, setIsExplorerOpen] = useState<boolean>(true);
     const [activeFilePath, setActiveFilePath] = useState<string>('contracts/fungible-token.compact');
     const [activeLanguage, setActiveLanguage] = useState<string>('compact');
+    const [copilotModel, setCopilotModel] = useState<string>('gemini-3.7-flash');
+
+    // Restore selected Gemini model from localStorage
+    useEffect(() => {
+        try {
+            const saved = localStorage.getItem('midnight_gemini_model');
+            if (saved === 'gemini-3.8-flash' || saved === 'gemini-3.7-flash') {
+                setCopilotModel(saved);
+            }
+        } catch { }
+    }, []);
+
+    const handleSelectCopilotModel = (model: string) => {
+        setCopilotModel(model);
+        try {
+            localStorage.setItem('midnight_gemini_model', model);
+        } catch { }
+        toast.info('Model Selected', `AI Copilot model set to ${model === 'gemini-3.8-flash' ? 'Gemini 3.8 Flash' : 'Gemini 3.7 Flash'}`);
+    };
 
     // Workspace files loading state
     const [isOpenModalOpen, setIsOpenModalOpen] = useState<boolean>(false);
@@ -845,6 +865,7 @@ import CompactStandardLibrary;
         }
 
         setIsCompiling(true);
+        toast.info('Compiling Contract', 'Synthesizing ZKIR circuits and generating cryptographic proving keys (this takes ~1-2 minutes)...');
         try {
             const res = await fetch('/api/compiler/compile', {
                 method: 'POST',
@@ -852,7 +873,7 @@ import CompactStandardLibrary;
                 body: JSON.stringify({
                     sourceCode,
                     filename,
-                    skipZk,
+                    skipZk: false,
                     persistToManaged,
                 }),
             });
@@ -862,9 +883,11 @@ import CompactStandardLibrary;
 
             if (data.success) {
                 updateEditorMarkers([]);
+                const keyInfo = data.keysCount ? ` & ${data.keysCount} proving key(s)` : '';
+                const timeSec = (data.durationMs / 1000).toFixed(1);
                 const msg = data.managedPath
-                    ? `Compiled in ${data.durationMs}ms & saved to ./${data.managedPath}`
-                    : `Compiled in ${data.durationMs}ms with ${data.circuits?.length || 0} circuit(s)`;
+                    ? `Compiled in ${timeSec}s (${data.circuits?.length || 0} circuits${keyInfo}) and saved to ./${data.managedPath}`
+                    : `Compiled in ${timeSec}s with ${data.circuits?.length || 0} circuit(s)${keyInfo}`;
                 toast.success('Compilation Succeeded!', msg);
                 if (activeTab === 'console') {
                     setActiveTab('circuits');
@@ -1261,18 +1284,11 @@ import CompactStandardLibrary;
                         <span className="hidden sm:inline">Format</span>
                     </button>
 
-                    {/* Skip ZK Prover toggle for lightning fast debugging */}
-                    <label className="flex items-center space-x-2 text-xs text-slate-400 bg-midnight-900/90 px-3 py-2 rounded-xl border border-white/5 cursor-pointer hover:border-white/10 select-none">
-                        <input
-                            type="checkbox"
-                            checked={skipZk}
-                            onChange={(e) => setSkipZk(e.target.checked)}
-                            className="rounded bg-midnight-950 border-white/20 text-indigo-600 focus:ring-0 h-3.5 w-3.5"
-                        />
-                        <span title="Skip generating proving keys for faster TS type checking">
-                            Fast Mode (--skip-zk)
-                        </span>
-                    </label>
+                    {/* Full ZK Prover indicator */}
+                    <div className="flex items-center space-x-1.5 text-xs text-emerald-400 bg-emerald-950/40 px-3 py-2 rounded-xl border border-emerald-500/20 select-none" title="Full ZK Proving & Verification Keys are generated for deployment and DApp export">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span className="font-mono text-[11px] font-semibold">Full Prover (Keys Active)</span>
+                    </div>
 
                     {/* Persist to contracts/managed toggle */}
                     <label className="flex items-center space-x-2 text-xs text-slate-300 bg-midnight-900/90 px-3 py-2 rounded-xl border border-white/5 cursor-pointer hover:border-white/10 select-none">
@@ -1306,21 +1322,34 @@ import CompactStandardLibrary;
                         )}
                     </button>
 
-                    {/* Highly Visible AI Copilot Button */}
-                    <button
-                        onClick={() => setActiveTab('ai')}
-                        className={`inline-flex items-center space-x-2 rounded-xl px-4 py-2 text-xs font-bold shadow-lg transition-all cursor-pointer ${activeTab === 'ai'
-                                ? 'bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-500 text-white shadow-indigo-500/30 scale-[1.02] ring-2 ring-indigo-400'
-                                : 'bg-gradient-to-r from-purple-600/40 via-indigo-600/40 to-cyan-500/40 text-indigo-100 border border-indigo-500/60 hover:from-purple-600 hover:to-cyan-500 hover:text-white shadow-indigo-950/50 hover:scale-[1.02]'
-                            }`}
-                        title="Open Gemini 3.7 Flash AI Copilot"
-                    >
-                        <Sparkles className="h-4 w-4 text-cyan-300 animate-pulse" />
-                        <span>AI Copilot</span>
-                        <span className="rounded-full bg-cyan-400/20 text-cyan-200 text-[10px] px-1.5 py-0.2 border border-cyan-400/40 font-mono">
-                            3.7 Flash
-                        </span>
-                    </button>
+                    {/* Highly Visible AI Copilot Button with Model Selector (Gemini 3.7 / 3.8 Flash) */}
+                    <div className={`inline-flex items-center rounded-xl p-0.5 text-xs font-bold shadow-lg transition-all ${
+                        activeTab === 'ai'
+                            ? 'bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-500 text-white shadow-indigo-500/30 scale-[1.02] ring-2 ring-indigo-400'
+                            : 'bg-gradient-to-r from-purple-600/40 via-indigo-600/40 to-cyan-500/40 text-indigo-100 border border-indigo-500/60 hover:from-purple-600/60 hover:to-cyan-500/60 hover:text-white shadow-indigo-950/50 hover:scale-[1.02]'
+                    }`}>
+                        <button
+                            onClick={() => setActiveTab('ai')}
+                            className="inline-flex items-center space-x-2 px-3 py-1.5 rounded-l-lg hover:bg-white/10 transition-colors cursor-pointer"
+                            title={`Open Gemini AI Copilot (${copilotModel === 'gemini-3.8-flash' ? '3.8 Flash' : '3.7 Flash'})`}
+                        >
+                            <Sparkles className="h-4 w-4 text-cyan-300 animate-pulse" />
+                            <span>AI Copilot</span>
+                        </button>
+                        <div className="h-4 w-[1px] bg-white/20 my-auto" />
+                        <div className="relative inline-flex items-center">
+                            <select
+                                value={copilotModel}
+                                onChange={(e) => handleSelectCopilotModel(e.target.value)}
+                                className="appearance-none bg-transparent hover:bg-white/10 text-cyan-200 text-[10px] font-mono font-semibold py-1.5 pl-2 pr-5 rounded-r-lg cursor-pointer focus:outline-none focus:ring-0 border-0"
+                                title="Switch AI Copilot Model (Gemini 3.7 Flash or 3.8 Flash)"
+                            >
+                                <option value="gemini-3.7-flash" className="bg-midnight-950 text-slate-200">3.7 Flash</option>
+                                <option value="gemini-3.8-flash" className="bg-midnight-950 text-slate-200">3.8 Flash</option>
+                            </select>
+                            <ChevronDown className="h-3 w-3 text-cyan-300 pointer-events-none absolute right-1" />
+                        </div>
+                    </div>
 
                     {/* 3. Run Tests for Current Contract (Ctrl+T) */}
                     <button
@@ -1895,10 +1924,10 @@ import CompactStandardLibrary;
                                             <button
                                                 onClick={() => setActiveTab('ai')}
                                                 className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-gradient-to-r from-rose-600 to-purple-600 text-white text-[11px] font-bold shadow hover:scale-105 transition-all cursor-pointer"
-                                                title="Open Gemini AI Copilot to automatically diagnose and fix this error"
+                                                title={`Open Gemini AI Copilot (${copilotModel === 'gemini-3.8-flash' ? '3.8 Flash' : '3.7 Flash'}) to automatically diagnose and fix this error`}
                                             >
                                                 <Sparkles className="h-3 w-3" />
-                                                <span>Fix with Gemini 3.7 Flash</span>
+                                                <span>Fix with {copilotModel === 'gemini-3.8-flash' ? 'Gemini 3.8 Flash' : 'Gemini 3.7 Flash'}</span>
                                             </button>
                                         </div>
                                         {compilationResult.diagnostics.map((diag: any, idx: number) => (
@@ -2163,6 +2192,8 @@ import CompactStandardLibrary;
                                     onSwitchTab={(tab) => setActiveTab(tab as OutputTab)}
                                     onRunTests={handleRunTests}
                                     isRunningTests={isRunningTests}
+                                    selectedModel={copilotModel}
+                                    onSelectModel={handleSelectCopilotModel}
                                 />
                             </div>
                         )}
