@@ -1,0 +1,695 @@
+pragma language_version >= 0.23;
+
+import CompactStandardLibrary;
+
+// ============================================================
+// Real Estate Escrow
+//
+// IMPORTANT:
+// This contract manages escrow STATE and authorization.
+// The actual asset transfer must be wired to the appropriate
+// Midnight asset/token mechanism in the DApp/ledger integration.
+//
+// Public ledger state should contain only information that is
+// intentionally public.
+// ============================================================
+
+
+export enum EscrowStatus {
+    Created,
+    Funded,
+    ContingenciesPending,
+    ReadyToClose,
+    Disputed,
+    Expired,
+    Settled,
+    Refunded
+}
+
+
+// ============================================================
+// PUBLIC IDENTITIES
+// ============================================================
+
+// Contract-specific domain separator / deployment salt.
+export ledger contractSalt: Bytes<32>;
+
+// Parties
+export ledger buyerPk: Bytes<32>;
+export ledger sellerPk: Bytes<32>;
+export ledger inspectorPk: Bytes<32>;
+export ledger lenderPk: Bytes<32>;
+export ledger titleAgentPk: Bytes<32>;
+export ledger escrowAgentPk: Bytes<32>;
+export ledger disputeResolverPk: Bytes<32>;
+
+
+// ============================================================
+// TRANSACTION DATA
+// ============================================================
+
+export ledger propertyHash: Bytes<32>;
+
+export ledger purchasePrice: Uint<64>;
+export ledger requiredDeposit: Uint<64>;
+export ledger depositedAmount: Uint<64>;
+
+
+// ============================================================
+// CONTINGENCY STATE
+// ============================================================
+
+export ledger inspectionSubmitted: Boolean;
+export ledger inspectionPassed: Boolean;
+
+export ledger financingSubmitted: Boolean;
+export ledger financingApproved: Boolean;
+
+export ledger titleSubmitted: Boolean;
+export ledger titleCleared: Boolean;
+
+
+// ============================================================
+// DEADLINES
+//
+// Unix timestamps represented as Uint<64>.
+// ============================================================
+
+export ledger inspectionDeadline: Uint<64>;
+export ledger financingDeadline: Uint<64>;
+export ledger titleDeadline: Uint<64>;
+export ledger closingDeadline: Uint<64>;
+
+
+// ============================================================
+// CONTRACT STATE
+// ============================================================
+
+export ledger status: EscrowStatus;
+
+
+// Prevent repeated/ambiguous lifecycle operations.
+export ledger lifecycleRound: Counter;
+
+
+// ============================================================
+// CALLER SECRET
+// ============================================================
+
+witness getCallerSecret(): Bytes<32>;
+
+
+// ============================================================
+// IDENTITY DERIVATION
+// ============================================================
+
+/**
+ * Derives the caller identity from a private secret.
+ *
+ * The contract salt and domain tag make the identity derivation
+ * specific to this escrow contract.
+ */
+circuit authenticateCaller(): Bytes<32> {
+
+    const domainTag = pad(
+        32,
+        "real-estate-escrow:caller:v1"
+    );
+
+    return persistentHash<Vector<3, Bytes<32>>>([
+        domainTag,
+        contractSalt,
+        getCallerSecret()
+    ]);
+}
+
+
+// ============================================================
+// AUTHORIZATION HELPERS
+// ============================================================
+
+circuit onlyBuyer(): [] {
+
+    const caller = authenticateCaller();
+
+    assert(
+        disclose(caller) == buyerPk,
+        "Only buyer may execute this action"
+    );
+}
+
+
+circuit onlySeller(): [] {
+
+    const caller = authenticateCaller();
+
+    assert(
+        disclose(caller) == sellerPk,
+        "Only seller may execute this action"
+    );
+}
+
+
+circuit onlyInspector(): [] {
+
+    const caller = authenticateCaller();
+
+    assert(
+        disclose(caller) == inspectorPk,
+        "Only inspector may execute this action"
+    );
+}
+
+
+circuit onlyLender(): [] {
+
+    const caller = authenticateCaller();
+
+    assert(
+        disclose(caller) == lenderPk,
+        "Only lender may execute this action"
+    );
+}
+
+
+circuit onlyTitleAgent(): [] {
+
+    const caller = authenticateCaller();
+
+    assert(
+        disclose(caller) == titleAgentPk,
+        "Only title agent may execute this action"
+    );
+}
+
+
+circuit onlyEscrowAgent(): [] {
+
+    const caller = authenticateCaller();
+
+    assert(
+        disclose(caller) == escrowAgentPk,
+        "Only escrow agent may execute this action"
+    );
+}
+
+
+circuit onlyDisputeResolver(): [] {
+
+    const caller = authenticateCaller();
+
+    assert(
+        disclose(caller) == disputeResolverPk,
+        "Only dispute resolver may execute this action"
+    );
+}
+
+
+circuit onlyBuyerOrSeller(): [] {
+
+    const caller = authenticateCaller();
+    const publicCaller = disclose(caller);
+
+    assert(
+        publicCaller == buyerPk || publicCaller == sellerPk,
+        "Only buyer or seller may execute this action"
+    );
+}
+
+
+// ============================================================
+// CONSTRUCTOR
+// ============================================================
+
+constructor(
+    _buyerPk: Bytes<32>,
+    _sellerPk: Bytes<32>,
+    _inspectorPk: Bytes<32>,
+    _lenderPk: Bytes<32>,
+    _titleAgentPk: Bytes<32>,
+    _escrowAgentPk: Bytes<32>,
+    _disputeResolverPk: Bytes<32>,
+
+    _propertyHash: Bytes<32>,
+
+    _purchasePrice: Uint<64>,
+    _requiredDeposit: Uint<64>,
+
+    _inspectionDeadline: Uint<64>,
+    _financingDeadline: Uint<64>,
+    _titleDeadline: Uint<64>,
+    _closingDeadline: Uint<64>,
+
+    _salt: Bytes<32>
+) {
+
+    // --------------------------------------------------------
+    // Basic validation
+    // --------------------------------------------------------
+
+    assert(
+        _purchasePrice > 0,
+        "Purchase price must be greater than zero"
+    );
+
+    assert(
+        _requiredDeposit > 0,
+        "Required deposit must be greater than zero"
+    );
+
+    assert(
+        _requiredDeposit <= _purchasePrice,
+        "Deposit cannot exceed purchase price"
+    );
+
+    assert(
+        _inspectionDeadline < _closingDeadline,
+        "Inspection deadline must precede closing deadline"
+    );
+
+    assert(
+        _financingDeadline < _closingDeadline,
+        "Financing deadline must precede closing deadline"
+    );
+
+    assert(
+        _titleDeadline < _closingDeadline,
+        "Title deadline must precede closing deadline"
+    );
+
+
+    // --------------------------------------------------------
+    // Public configuration
+    // --------------------------------------------------------
+
+    contractSalt = disclose(_salt);
+
+    buyerPk = disclose(_buyerPk);
+    sellerPk = disclose(_sellerPk);
+    inspectorPk = disclose(_inspectorPk);
+    lenderPk = disclose(_lenderPk);
+    titleAgentPk = disclose(_titleAgentPk);
+    escrowAgentPk = disclose(_escrowAgentPk);
+    disputeResolverPk = disclose(_disputeResolverPk);
+
+    propertyHash = disclose(_propertyHash);
+
+    purchasePrice = disclose(_purchasePrice);
+    requiredDeposit = disclose(_requiredDeposit);
+
+    depositedAmount = disclose(0);
+
+
+    // --------------------------------------------------------
+    // Contingencies
+    // --------------------------------------------------------
+
+    inspectionSubmitted = false;
+    inspectionPassed = false;
+
+    financingSubmitted = false;
+    financingApproved = false;
+
+    titleSubmitted = false;
+    titleCleared = false;
+
+
+    // --------------------------------------------------------
+    // Deadlines
+    // --------------------------------------------------------
+
+    inspectionDeadline = disclose(_inspectionDeadline);
+    financingDeadline = disclose(_financingDeadline);
+    titleDeadline = disclose(_titleDeadline);
+    closingDeadline = disclose(_closingDeadline);
+
+
+    // --------------------------------------------------------
+    // Initial state
+    // --------------------------------------------------------
+
+    status = EscrowStatus.Created;
+
+    lifecycleRound.increment(0);
+}
+
+
+// ============================================================
+// FUND ESCROW
+// ============================================================
+
+/**
+ * Records the amount that has been successfully deposited.
+ *
+ * IMPORTANT:
+ * The DApp MUST perform/verify the actual asset transfer.
+ *
+ * This circuit alone does NOT move assets.
+ */
+export circuit depositEarnestMoney(
+    amount: Uint<64>
+): [] {
+
+    assert(
+        status == EscrowStatus.Created,
+        "Escrow must be in Created state"
+    );
+
+    onlyBuyer();
+
+    assert(
+        amount >= requiredDeposit,
+        "Deposit is below required amount"
+    );
+
+    assert(
+        amount <= purchasePrice,
+        "Deposit cannot exceed purchase price"
+    );
+
+    depositedAmount = disclose(amount);
+
+    status = EscrowStatus.Funded;
+
+    lifecycleRound.increment(1);
+}
+
+
+// ============================================================
+// BEGIN CONTINGENCY PROCESS
+// ============================================================
+
+export circuit beginContingencyReview(): [] {
+
+    assert(
+        status == EscrowStatus.Funded,
+        "Escrow must be funded"
+    );
+
+    assert(
+        depositedAmount >= requiredDeposit,
+        "Required deposit has not been recorded"
+    );
+
+    status = EscrowStatus.ContingenciesPending;
+
+    lifecycleRound.increment(1);
+}
+
+
+// ============================================================
+// INSPECTION
+// ============================================================
+
+export circuit submitInspectionReport(
+    passed: Boolean
+): [] {
+
+    assert(
+        status == EscrowStatus.ContingenciesPending,
+        "Contingencies are not active"
+    );
+
+    onlyInspector();
+
+    assert(
+        !inspectionSubmitted,
+        "Inspection has already been submitted"
+    );
+
+    inspectionSubmitted = true;
+    inspectionPassed = disclose(passed);
+
+    lifecycleRound.increment(1);
+}
+
+
+// ============================================================
+// FINANCING
+// ============================================================
+
+export circuit confirmFinancingApproval(
+    approved: Boolean
+): [] {
+
+    assert(
+        status == EscrowStatus.ContingenciesPending,
+        "Contingencies are not active"
+    );
+
+    onlyLender();
+
+    assert(
+        !financingSubmitted,
+        "Financing decision has already been submitted"
+    );
+
+    financingSubmitted = true;
+    financingApproved = disclose(approved);
+
+    lifecycleRound.increment(1);
+}
+
+
+// ============================================================
+// TITLE
+// ============================================================
+
+export circuit submitTitleClearance(
+    cleared: Boolean
+): [] {
+
+    assert(
+        status == EscrowStatus.ContingenciesPending,
+        "Contingencies are not active"
+    );
+
+    onlyTitleAgent();
+
+    assert(
+        !titleSubmitted,
+        "Title decision has already been submitted"
+    );
+
+    titleSubmitted = true;
+    titleCleared = disclose(cleared);
+
+    lifecycleRound.increment(1);
+}
+
+
+// ============================================================
+// READY TO CLOSE
+// ============================================================
+
+export circuit markReadyToClose(): [] {
+
+    assert(
+        status == EscrowStatus.ContingenciesPending,
+        "Contingencies are not active"
+    );
+
+    assert(
+        inspectionSubmitted,
+        "Inspection has not been submitted"
+    );
+
+    assert(
+        inspectionPassed,
+        "Inspection has not passed"
+    );
+
+    assert(
+        financingSubmitted,
+        "Financing decision has not been submitted"
+    );
+
+    assert(
+        financingApproved,
+        "Financing has not been approved"
+    );
+
+    assert(
+        titleSubmitted,
+        "Title decision has not been submitted"
+    );
+
+    assert(
+        titleCleared,
+        "Title has not been cleared"
+    );
+
+    status = EscrowStatus.ReadyToClose;
+
+    lifecycleRound.increment(1);
+}
+
+
+// ============================================================
+// SETTLEMENT
+// ============================================================
+
+/**
+ * Records escrow-agent approval to release funds.
+ *
+ * IMPORTANT:
+ * This circuit only finalizes escrow state. The DApp/ledger
+ * integration MUST perform the actual asset transfer.
+ */
+export circuit releaseFunds(): [] {
+
+    assert(
+        status == EscrowStatus.ReadyToClose,
+        "Escrow is not ready to close"
+    );
+
+    onlyEscrowAgent();
+
+    status = EscrowStatus.Settled;
+
+    lifecycleRound.increment(1);
+}
+
+
+/**
+ * Finalizes the escrow state.
+ *
+ * Actual asset release must be performed through the appropriate
+ * Midnight asset mechanism / integration.
+ */
+export circuit settleEscrow(): [] {
+
+    assert(
+        status == EscrowStatus.ReadyToClose,
+        "Escrow is not ready to close"
+    );
+
+    onlyBuyerOrSeller();
+
+    status = EscrowStatus.Settled;
+
+    lifecycleRound.increment(1);
+}
+
+
+// ============================================================
+// REFUND AFTER FAILED CONTINGENCY
+// ============================================================
+
+export circuit cancelAndRefund(): [] {
+
+    assert(
+        status == EscrowStatus.ContingenciesPending,
+        "Escrow is not in contingency review"
+    );
+
+    onlyBuyer();
+
+    const inspectionFailed =
+        inspectionSubmitted && !inspectionPassed;
+
+    const financingFailed =
+        financingSubmitted && !financingApproved;
+
+    const titleFailed =
+        titleSubmitted && !titleCleared;
+
+    assert(
+        inspectionFailed ||
+        financingFailed ||
+        titleFailed,
+        "No submitted contingency has failed"
+    );
+
+    status = EscrowStatus.Refunded;
+
+    lifecycleRound.increment(1);
+}
+
+
+// ============================================================
+// EXPIRATION
+// ============================================================
+
+/**
+ * Expiration logic should use the current Midnight time/block
+ * primitive supported by the exact compiler/network version.
+ *
+ * The comparison is intentionally isolated here so that the
+ * production deployment can bind it to the correct time API.
+ */
+export circuit expireEscrow(): [] {
+
+    assert(
+        status == EscrowStatus.Funded ||
+        status == EscrowStatus.ContingenciesPending,
+        "Escrow cannot expire in current state"
+    );
+
+    // TODO:
+    // Replace with the exact block-time primitive supported by
+    // the production Compact/network version.
+    //
+    // assert(
+    //     blockTimeGte(closingDeadline),
+    //     "Closing deadline has not expired"
+    // );
+
+    status = EscrowStatus.Expired;
+
+    lifecycleRound.increment(1);
+}
+
+
+// ============================================================
+// DISPUTE
+// ============================================================
+
+export circuit openDispute(): [] {
+
+    assert(
+        status == EscrowStatus.ContingenciesPending ||
+        status == EscrowStatus.ReadyToClose,
+        "Escrow cannot be disputed in current state"
+    );
+
+    onlyBuyerOrSeller();
+
+    status = EscrowStatus.Disputed;
+
+    lifecycleRound.increment(1);
+}
+
+
+// ============================================================
+// DISPUTE RESOLUTION
+// ============================================================
+
+export circuit resolveDisputeRefund(): [] {
+
+    assert(
+        status == EscrowStatus.Disputed,
+        "Escrow is not disputed"
+    );
+
+    onlyDisputeResolver();
+
+    status = EscrowStatus.Refunded;
+
+    lifecycleRound.increment(1);
+}
+
+
+export circuit resolveDisputeSettlement(): [] {
+
+    assert(
+        status == EscrowStatus.Disputed,
+        "Escrow is not disputed"
+    );
+
+    onlyDisputeResolver();
+
+    status = EscrowStatus.Settled;
+
+    lifecycleRound.increment(1);
+}

@@ -24,12 +24,15 @@ describe('Export DApp Bundle API (/api/workspace/export-dapp)', () => {
         expect(data.detectedFiles).toContain('contract/index.d.ts');
         expect(data.detectedFiles).toContain('contract/index.js');
 
-        // Master prompt must mention the contract and Midnight architecture
+        // Master prompt must mention the contract, Midnight architecture, Clean Architecture, Side Panel, and Dashboard
         expect(data.masterPrompt).toContain('# Midnight Network DApp Frontend Architecture Prompt: FungibleToken');
         expect(data.masterPrompt).toContain('WalletProvider');
         expect(data.masterPrompt).toContain('PublicDataProvider');
         expect(data.masterPrompt).toContain('ProofProvider');
         expect(data.masterPrompt).toContain('UI/UX design');
+        expect(data.masterPrompt).toContain('Clean Architecture');
+        expect(data.masterPrompt).toContain('Side Panel');
+        expect(data.masterPrompt).toContain('Dashboard');
 
         // Verify deploymentConfig uses MIDNIGHT_CONFIG defaults
         expect(data.deploymentConfig.networkId).toBe(MIDNIGHT_CONFIG.networkId);

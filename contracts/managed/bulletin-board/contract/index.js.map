@@ -1,8 +1,8 @@
 {
   "version": 3,
   "file": "index.js",
-  "sourceRoot": "../../src/",
-  "sources": ["bulletin-board.compact", "compiler/standard-library.compact"],
+  "sourceRoot": "",
+  "sources": ["../midnight-compact-studio/contracts/bulletin-board.compact", "compiler/standard-library.compact"],
   "names": [],
   "mappings": ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;EAoBA;;;;;;;;;;;;;MAqBA,AAAA,WAyBC;;;;;cAzB0B,YAA4B;;;;;;;;;;;yCAA5B,YAA4B;;;;;;;;;6CAA5B,YAA4B;;;OAyBtD;MAKD,AAAA,QAgBC;;;;;;;;;;;;;;;;;;;;;;OAAA;;;;;;;;;;GA9DA;EALD;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;IAXA;;;;;;;;;yEAA2B;IAC3B;;;;;;;;;yEAA+C;IAC/C;;;;;;;;;yEAAgC;IAChC;;;;;;;;;yEAA+B;IAS7B;;;;;;;;;yEAAK;UACL,KAAO;IAAP;;;;;;;2HAAA,KAAO;;yEAAA;IACP;;;;;;;;;yEAAK;UACL,KAAQ;IAAR;;;;;;;;;;6FAAA,KAAQ;;;;wEAAA;;;;;;;GACT;ECFD,AAAA,QAAuB,0CACkB;EAGzC,AAAA;EA3BA,AAAA,kBAAA;oEAAA;;;EDeA,AAAA,iBAAoC;;0DAApC,cAAoC;;;;;;;;;;;;;;GAAA;EAepC,AAAA,iBAMC,CANsB,IAAa,EAAE,KAAc;;mCAGhD,KAAG;mCACH,IAAE;GAEL;EAKD,AAAA,cAyBC,4BAzB0B,YAA4B;gCACjD;;;;;;;;;;;qGAAK;;;;YACD,YAA2C;wFAA9B;;;;;;;;;;;6JAAQ;;YACrB,KAAkD;;2CAAX,YAAU;MAEvD;;;;;;;6HAAiB,KAAG;;2EAAf;YACL,KAAO,gBAAmC,YAAU;MAApD;;;;;;;6HAAA,KAAO;;2EAAA;MACP;;;;;;;;;2EAAK;YAEL,KAAQ;MAAR;;;;;;;;;;+FAAA,KAAQ;;;;0EAAA;;YAIF,YAAkB,2BAAL;;;;;;;;;;;wHAAK;YAClB,aAAsF;;;0IAArC;;;;;;;;;;;+MAAQ;;;4CACxD,YAAU,EAAI,aAAW;;YAGhC,KAAO,gBAAmC,YAAU;MAApD;;;;;;;6HAAA,KAAO;;2EAAA;YAGD,SAAwC;qFAA9B;;;;;;;;;;;0JAAQ;;YACxB,KAAK;;2CAA6C,SAAO;MAAzD;;;;;;;6HAAA,KAAK;;2EAAA;YACL,KAAQ;MAAR;;;;;;;;;;+FAAA,KAAQ;;;;0EAAA;;;GAEX;EAKD,AAAA,WAgBC;oDAfQ;;;;;;;;;;;yHAAK;;;;oDACL;;;;;;;;;;;yHAAO;;UAGR,aAAsF;;;wIAArC;;;;;;;;;;;6MAAQ;;;kEACxD;;;;;;;;;;;uIAAK;0CAAI,aAAW;;UAErB,WAAyB,2BAAb;;;;;;;;;;;qHAAO;IAEzB;;;;;;;;;yEAAK;UACL,KAAO;IAAP;;;;;;;2HAAA,KAAO;;yEAAA;IACP;;;;;;;;;yEAAK;UACL,KAAQ;IAAR;;;;;;;;;;6FAAA,KAAQ;;;;wEAAA;WAED,WAAS;GACjB;;;;;;;;;;;;;;;;;;;;;;;;IA9ED;qCAAA;;;;;;;;;;;0GAA2B;KAAA;IAC3B;qCAAA;;;;;;;;;;;0GAA+C;KAAA;IAC/C;qCAAA;;;;;;;;;;;0GAAgC;KAAA;IAChC;qCAAA;;;;;;;;;;;0GAA+B;KAAA;;;;;;;;;;"
 }

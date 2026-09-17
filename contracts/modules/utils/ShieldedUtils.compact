@@ -1,108 +1,229 @@
-// SPDX-License-Identifier: MIT
-// OpenZeppelin Midnight Apps Contracts v0.0.1-alpha.0 (shielded-token/openzeppelin/Utils.compact)
+pragma language_version >= 0.23;
 
-pragma language_version >= 0.22;
+import CompactStandardLibrary;
 
-module Utils {
-  import CompactStandardLibrary;
+// Escrow lifecycle status
+enum EscrowStatus {
+    Created,
+    Funded,
+    Settled,
+    Refunded
+}
 
-  /**
-   * @description Returns whether `keyOrAddress` is the zero address.
-   *
-   * @param {keyOrAddress} - The target value to check, either a ZswapCoinPublicKey or a ContractAddress.
-   * @return {Boolean} - Returns true if `keyOrAddress` is zero.
-   */
-  export pure circuit isKeyOrAddressZero(
-                        keyOrAddress: Either<ZswapCoinPublicKey, ContractAddress>
-                        ): Boolean {
-    if (keyOrAddress.is_left) {
-      return keyOrAddress == eitherZeroZPK();
-    } else {
-      return keyOrAddress == eitherZeroContractAddress();
-    }
-  }
+// Contract salt for replay protection
+export ledger _contractSalt: Bytes<32>;
 
-  /**
-   * @description Returns a zero-filled 32-byte array.
-   *
-   * @return {Bytes<32>} - A 32-byte array filled with zeros.
-   */
-  export pure circuit zeroBytes(): Bytes<32> {
-    return pad(32, "");
-  }
+// Designated settlement token address
+export ledger tokenAddress: Bytes<32>;
 
-  /**
-   * @description Returns a zero Zswap coin public key.
-   *
-   * @return {ZswapCoinPublicKey} - A ZswapCoinPublicKey with all bytes set to zero.
-   */
-  export pure circuit zeroZPK(): ZswapCoinPublicKey {
-    return ZswapCoinPublicKey { bytes: zeroBytes() };
-  }
+// Internal ledger balances: Account -> Uint<64> balance
+export ledger tokenBalances: Map<Bytes<32>, Uint<64>>;
 
-  /**
-   * @description Returns the caller's Zswap coin public key.
-   *
-   * @return {ZswapCoinPublicKey} - The public key of the caller.
-   */
-  export circuit callerZPK(): ZswapCoinPublicKey {
-    return ownPublicKey();
-  }
+// Escrow internal vault balance
+export ledger escrowVaultBalance: Uint<64>;
 
-  /**
-   * @description Returns the current contract's address.
-   *
-   * @return {ContractAddress} - The address of this contract.
-   */
-  export circuit thisAddress(): ContractAddress {
-    return kernel.self();
-  }
+// Public ledger identity states
+export ledger buyerPk: Bytes<32>;
+export ledger sellerPk: Bytes<32>;
+export ledger inspectorPk: Bytes<32>;
+export ledger titleAgentPk: Bytes<32>;
 
-  /**
-   * @description Returns the sender's public key as the left variant of an Either type, representing
-   * a ZswapCoinPublicKey.
-   *
-   * @returns Either<ZswapCoinPublicKey, ContractAddress> The sender’s public key as the left variant.
-   */
-  export circuit eitherCaller(): Either<ZswapCoinPublicKey, ContractAddress> {
-    return left<ZswapCoinPublicKey, ContractAddress>(callerZPK());
-  }
+export ledger propertyHash: Bytes<32>;
+export ledger purchasePrice: Uint<64>;
+export ledger escrowDeposit: Uint<64>;
 
-  /**
-   * @description Returns a zero Zswap coin public key as the left variant of an Either type.
-   *
-   * @return {Either<ZswapCoinPublicKey, ContractAddress>} - Zero ZswapCoinPublicKey as the left variant.
-   */
-  export pure circuit eitherZeroZPK(): Either<ZswapCoinPublicKey, ContractAddress> {
-    return left<ZswapCoinPublicKey, ContractAddress>(zeroZPK());
-  }
+// Contingency status flags
+export ledger inspectionSubmitted: Boolean;
+export ledger inspectionPassed: Boolean;
 
-  /**
-   * @description Returns a zero contract address as the right variant of an Either type.
-   *
-   * @return {Either<ZswapCoinPublicKey, ContractAddress>} - Zero ContractAddress as the right variant.
-   */
-  export pure circuit eitherZeroContractAddress(): Either<ZswapCoinPublicKey, ContractAddress> {
-    return right<ZswapCoinPublicKey, ContractAddress>(ContractAddress { zeroBytes() });
-  }
+export ledger financingSubmitted: Boolean;
+export ledger financingApproved: Boolean;
 
-  /**
-   * @description Wraps a Zswap coin public key as the left variant of an Either type.
-   *
-   * @param {pk} - The Zswap coin public key to wrap.
-   * @return {Either<ZswapCoinPublicKey, ContractAddress>} - The public key as the left variant.
-   */
-  export circuit eitherZPK(pk: ZswapCoinPublicKey): Either<ZswapCoinPublicKey, ContractAddress> {
-    return left<ZswapCoinPublicKey, ContractAddress>(pk);
-  }
+export ledger titleSubmitted: Boolean;
+export ledger titleCleared: Boolean;
 
-  /**
-   * @description Returns the contract’s address as the right variant of an Either type, representing
-   * a ContractAddress.
-   *
-   * @returns Either<ZswapCoinPublicKey, ContractAddress> The contract’s address as the right variant.
-   */
-  export circuit eitherThisAddress(): Either<ZswapCoinPublicKey, ContractAddress> {
-    return right<ZswapCoinPublicKey, ContractAddress>(thisAddress());
-  }
+export ledger status: EscrowStatus;
+
+// Unified secret witness for the active prover
+witness getCallerSecret(): Bytes<32>;
+
+// Constructor initializes escrow parameters and accepted currency
+constructor(
+    _tokenAddress: Bytes<32>,
+    _buyerPk: Bytes<32>,
+    _sellerPk: Bytes<32>,
+    _inspectorPk: Bytes<32>,
+    _titleAgentPk: Bytes<32>,
+    _propertyHash: Bytes<32>,
+    _purchasePrice: Uint<64>,
+    _escrowDeposit: Uint<64>,
+    _salt: Bytes<32>
+) {
+    _contractSalt = disclose(_salt);
+    tokenAddress = disclose(_tokenAddress);
+    
+    buyerPk = disclose(_buyerPk);
+    sellerPk = disclose(_sellerPk);
+    inspectorPk = disclose(_inspectorPk);
+    titleAgentPk = disclose(_titleAgentPk);
+    propertyHash = disclose(_propertyHash);
+    purchasePrice = disclose(_purchasePrice);
+    escrowDeposit = disclose(_escrowDeposit);
+
+    escrowVaultBalance = 0;
+
+    inspectionSubmitted = false;
+    inspectionPassed = false;
+    financingSubmitted = false;
+    financingApproved = false;
+    titleSubmitted = false;
+    titleCleared = false;
+    
+    status = EscrowStatus.Created;
+}
+
+/**
+ * Derives the caller's public key from their private secret.
+ * Bound to _contractSalt for cross-contract replay protection.
+ */
+circuit authenticateCaller(): Bytes<32> {
+    const domainTag = pad(32, "escrow-contingency-settlement:auth");
+    return persistentHash<Vector<3, Bytes<32>>>([
+        domainTag,
+        _contractSalt,
+        getCallerSecret()
+    ]);
+}
+
+circuit onlyBuyer(): Bytes<32> {
+    const caller = authenticateCaller();
+    assert(caller == buyerPk, "Escrow: only buyer can execute this action");
+    return caller;
+}
+
+circuit onlySeller(): Bytes<32> {
+    const caller = authenticateCaller();
+    assert(caller == sellerPk, "Escrow: only seller can execute this action");
+    return caller;
+}
+
+circuit onlyInspector(): Bytes<32> {
+    const caller = authenticateCaller();
+    assert(caller == inspectorPk, "Escrow: only inspector can execute this action");
+    return caller;
+}
+
+circuit onlyTitleAgent(): Bytes<32> {
+    const caller = authenticateCaller();
+    assert(caller == titleAgentPk, "Escrow: only title agent can execute this action");
+    return caller;
+}
+
+circuit onlyBuyerOrSeller(): Bytes<32> {
+    const caller = authenticateCaller();
+    assert(caller == buyerPk || caller == sellerPk, "Escrow: only buyer or seller can execute this action");
+    return caller;
+}
+
+// Utility circuit: credited balance or 0 if uninitialized
+circuit getBalance(account: Bytes<32>): Uint<64> {
+    return tokenBalances.member(account) ? tokenBalances[account] : 0;
+}
+
+/**
+ * Buyer deposits earnest money:
+ * 1. Checks that buyer has sufficient tokens in the internal ledger.
+ * 2. Deducts the tokens from buyer's ledger balance.
+ * 3. Credits the escrow contract vault.
+ */
+export circuit depositEarnestMoney(amount: Uint<64>): [] {
+    assert(status == EscrowStatus.Created, "Escrow is not in Created state");
+    const buyer = onlyBuyer();
+    
+    assert(amount >= escrowDeposit, "Deposit amount must meet required escrow deposit");
+    
+    const buyerBalance = getBalance(buyer);
+    assert(buyerBalance >= amount, "Insufficient buyer token balance");
+
+    // Debit buyer and credit escrow vault
+    tokenBalances[buyer] = buyerBalance - amount;
+    escrowVaultBalance = escrowVaultBalance + amount;
+
+    status = EscrowStatus.Funded;
+}
+
+// Certified Inspector completes inspection contingency
+export circuit submitInspectionReport(passed: Boolean): [] {
+    assert(status == EscrowStatus.Funded, "Escrow must be funded to process contingencies");
+    onlyInspector();
+    
+    inspectionSubmitted = true;
+    inspectionPassed = disclose(passed);
+}
+
+// Buyer/Lender approves loan/financing contingency
+export circuit confirmFinancingApproval(approved: Boolean): [] {
+    assert(status == EscrowStatus.Funded, "Escrow must be funded to process contingencies");
+    onlyBuyer();
+    
+    financingSubmitted = true;
+    financingApproved = disclose(approved);
+}
+
+// Title Agent verifies and clears title
+export circuit submitTitleClearance(cleared: Boolean): [] {
+    assert(status == EscrowStatus.Funded, "Escrow must be funded to process contingencies");
+    onlyTitleAgent();
+    
+    titleSubmitted = true;
+    titleCleared = disclose(cleared);
+}
+
+/**
+ * Settle escrow:
+ * Satisfies all contingencies, empties the vault, and credits the seller's balance.
+ */
+export circuit settleEscrow(): [] {
+    assert(status == EscrowStatus.Funded, "Escrow is not active/funded");
+    assert(inspectionSubmitted && inspectionPassed, "Inspection contingency not passed");
+    assert(financingSubmitted && financingApproved, "Financing contingency not approved");
+    assert(titleSubmitted && titleCleared, "Title clearance contingency not met");
+
+    onlyBuyerOrSeller();
+
+    // Disburse funds from vault to seller
+    const payoutAmount = escrowVaultBalance;
+    assert(payoutAmount > 0, "Vault holds zero balance");
+
+    escrowVaultBalance = 0;
+    tokenBalances[sellerPk] = getBalance(sellerPk) + payoutAmount;
+
+    status = EscrowStatus.Settled;
+}
+
+/**
+ * Cancel and refund:
+ * If any submitted contingency failed, empties the vault and refunds the buyer.
+ */
+export circuit cancelAndRefund(): [] {
+    assert(status == EscrowStatus.Funded, "Escrow cannot be refunded in current status");
+    const buyer = onlyBuyer();
+    
+    const inspectionFailed = inspectionSubmitted && !inspectionPassed;
+    const financingFailed = financingSubmitted && !financingApproved;
+    const titleFailed = titleSubmitted && !titleCleared;
+
+    assert(
+        inspectionFailed || financingFailed || titleFailed,
+        "Cannot refund: no submitted contingency has failed"
+    );
+
+    // Return escrowed funds to buyer
+    const refundAmount = escrowVaultBalance;
+    assert(refundAmount > 0, "Vault holds zero balance");
+
+    escrowVaultBalance = 0;
+    tokenBalances[buyer] = getBalance(buyer) + refundAmount;
+
+    status = EscrowStatus.Refunded;
 }

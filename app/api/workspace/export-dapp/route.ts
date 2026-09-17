@@ -128,7 +128,7 @@ function generateGeminiDAppPrompt(
 
     return `# Midnight Network DApp Frontend Architecture Prompt: ${pascalName}
 
-You are an expert full-stack Web3 engineer and UI/UX designer specializing in the **Midnight Network**, the **Compact smart contract runtime**, modern **React 19 / Next.js (App Router)** frontend engineering, and world-class **UI/UX design**.
+You are an expert full-stack Web3 engineer and UI/UX designer specializing in the **Midnight Network**, the **Compact smart contract runtime**, modern **React 19 / Next.js (App Router)** frontend engineering, **Clean Architecture**, and world-class **UI/UX design**.
 
 A Midnight Compact smart contract called **\`${baseContractName}\`** has been compiled, tested, and prepared for deployment. All relevant contract artifacts, compiled TypeScript definitions, ZKIR circuit bytecodes, client SDK adapters, and deployment configurations are provided in this bundle.
 
@@ -139,29 +139,89 @@ ${fileList.map((f) => `- \`${f}\``).join('\n')}
 
 ---
 
-## 🎯 Primary Goal
+## 🎯 Primary Goal & Mandatory Requirements
 Scaffold and implement a complete, production-grade **React 19 / Next.js (App Router)** DApp client that interacts with the deployed **\`${pascalName}\`** smart contract on Midnight.
 
----
-
-## 🏗️ Architecture Requirements
-
-### 1. Technology Stack
-- **Framework**: Next.js 15+ (App Router) / React 19
-- **Midnight SDK**:
-  - \`@midnight-ntwrk/compact-runtime\`
-  - \`@midnight-ntwrk/midnight-js-contracts\`
-  - \`@midnight-ntwrk/midnight-js-fetch-zk-config-provider\`
-  - \`@midnight-ntwrk/midnight-js-http-client-proof-provider\`
-  - \`@midnight-ntwrk/midnight-js-indexer-public-data-provider\`
-  - \`@midnight-ntwrk/midnight-js-level-private-state-provider\` (or in-browser IndexedDB / LocalStorage adapter)
-  - \`@midnight-ntwrk/midnight-js-types\`
-- **State & Reactivity**: React Context + RxJS observables for live indexer contract state subscriptions.
-- **Styling & UX/UI**: Modern dark-mode UI with Tailwind CSS or Vanilla CSS, Lucide React icons, rich visual hierarchy, smooth micro-interactions, responsive layouts, and sleek feedback toasts.
+You **MUST** adhere to these 3 mandatory requirements:
+1. **Build a Clean Architecture DApp**: Decouple domain logic, use cases, external infrastructure/Midnight SDK providers, and presentation layers.
+2. **The UI must have a Side Panel**: Provide a persistent, sleek navigation side panel (sidebar) with responsive drawer support.
+3. **The DApp must have a Dashboard**: Feature a comprehensive dashboard as the central landing hub with stat cards, contract overview, quick action triggers, and live activity streams.
 
 ---
 
-## 2. Network & Deployment Configuration
+## 🏗️ 1. Clean Architecture Specification
+You must organize the codebase strictly across Clean Architecture layers:
+
+### A. Domain Layer (\`src/domain/\`)
+- **Entities & Models** (\`src/domain/models/\` or \`src/domain/entities/\`):
+  - Pure TypeScript domain models representing contract state, accounts, token balances, transaction receipts, and network status.
+- **Ports (Interfaces)** (\`src/domain/ports/\`):
+  - \`i-wallet.gateway.ts\`: Pure interface for wallet connection, account retrieval, network validation, and balance observation.
+  - \`i-contract.gateway.ts\`: Pure interface for contract interactions, calling circuits, subscribing to public ledger state, and tracking transaction lifecycles.
+  - \`i-activity.storage.ts\`: Pure interface for storing and retrieving recent transaction history and activity logs.
+
+### B. Application Layer - Use Cases (\`src/application/use-cases/\`)
+- Framework-agnostic use cases encapsulating business workflows:
+  - \`connect-wallet.usecase.ts\`: Connects wallet and validates network ID.
+  - \`get-contract-state.usecase.ts\`: Retrieves and watches public/private contract state.
+  - \`execute-circuit.usecase.ts\` (e.g. transfer, mint, or contract-specific circuits): Validates parameters, initiates transactions, and coordinates proof generation.
+  - \`get-activities.usecase.ts\`: Retrieves past transactions and streams new receipts.
+
+### C. Infrastructure Layer - Adapters & Providers (\`src/infrastructure/\`)
+- **Adapters** (\`src/infrastructure/adapters/\`):
+  - \`wallet.adapter.ts\`: Implements \`IWalletGateway\` using \`@midnight-ntwrk/dapp-connector-api\` (\`window.midnight\`).
+  - \`contract.adapter.ts\`: Implements \`IContractGateway\` utilizing the client SDK (\`src/client/${baseContractName}-sdk.ts\`) and Midnight providers.
+  - \`activity.storage.ts\`: Implements \`IActivityStorage\` using browser LocalStorage or IndexedDB.
+- **Provider Assembly** (\`src/infrastructure/providers/midnight-providers.ts\`):
+  - Assembles the 5 essential Midnight providers into a unified \`MidnightProvider\`:
+    1. **WalletProvider**: Derived from the connected Lace wallet instance via the DApp Connector API.
+    2. **PublicDataProvider**: Configured with \`@midnight-ntwrk/midnight-js-indexer-public-data-provider\` pointing to the Indexer GraphQL URL (\`${config.indexerUrl || DEFAULT_DEPLOYMENT_CONFIG.indexerUrl}\`).
+    3. **ProofProvider**: Configured with \`@midnight-ntwrk/midnight-js-http-client-proof-provider\` pointing to the proof server (\`${config.proofServerUrl || DEFAULT_DEPLOYMENT_CONFIG.proofServerUrl}\`) or delegated proving via Lace.
+    4. **ZKConfigProvider**: Serves the compiled ZKIR circuit bytecodes from \`public/zkir/${baseContractName}/\`.
+    5. **PrivateStateProvider**: In-browser local private state manager for storing off-chain witness data.
+- **Configuration** (\`src/infrastructure/config/midnight.config.ts\`):
+  - Centralized network endpoints and contract deployment parameters matching \`deployment.config.json\`.
+
+### D. Presentation Layer (\`src/presentation/\`)
+- **Contexts** (\`src/presentation/context/\`):
+  - \`WalletContext.tsx\`: React context exposing wallet connection, address, balance, and network.
+  - \`ContractContext.tsx\`: React context providing reactive access to contract state and use cases.
+- **Hooks** (\`src/presentation/hooks/\`):
+  - \`use${pascalName}.ts\`: Exposes circuit methods, reactive state streams, and transaction progress.
+  - \`useActivity.ts\`: Hook for querying and subscribing to recent transaction activity.
+- **Components** (\`src/presentation/components/\`):
+  - Clean, reusable React components styled with modern dark-mode Tailwind CSS.
+
+---
+
+## 🎨 2. UI/UX Requirements: Side Panel & Dashboard
+
+### A. Navigation Side Panel (Sidebar)
+- **Positioning & Layout**: Persistent left sidebar on desktop (collapsible / expandable) with a mobile slide-over drawer toggle.
+- **Branding & Network Header**: Displays DApp logo/title, contract badge, and active network status indicator with pulse animation (e.g. \`${config.networkId || DEFAULT_DEPLOYMENT_CONFIG.networkId}\` - Connected).
+- **Navigation Menu** (using modern Lucide icons):
+  - 📊 **Dashboard**: Overview, metrics, and quick action cards.
+  - ⚡ **Circuits / Actions**: Dedicated panels for invoking smart contract circuits (transfers, mints, state changes).
+  - 📜 **Activity History**: Full transaction log, execution receipts, and block explorer links.
+  - ⚙️ **Contract & Config**: Deployed contract address, salt, explorer link, and endpoint settings.
+- **Bottom Status Widget**: Compact card displaying connected account address (truncated), DUST gas balance, and disconnect button.
+
+### B. Comprehensive Dashboard (Central Hub)
+- **Top Metrics Bar / Stat Cards**:
+  - **Token / Contract Stats**: Token symbol, token name, total supply, active state.
+  - **User Balances**: Private/shielded balance, transparent/unshielded balance, and DUST gas tokens.
+  - **Contract Status**: Active contract address (\`${config.contractAddress || DEFAULT_DEPLOYMENT_CONFIG.contractAddress}\`) with one-click copy and block explorer link, deployment status, and owner status indicator.
+- **Quick Action Triggers**: Quick-action card grid for instant circuit executions (e.g., "Quick Transfer", "Mint Tokens", "Check Balance") with smooth modal or inline form triggers.
+- **Live Transaction Stepper**: Real-time visual progress showing:
+  - 🧮 Proof Generation (ZK Prover)
+  - ⚖️ Transaction Balancing (Dust & Fee Calculation)
+  - ⛓️ Network Submission & Block Inclusion
+  - ✅ On-Chain Confirmation with explorer receipt link.
+- **Recent Activity Stream**: Live feed of the latest transactions with status badges, timestamps, amount/circuit details, and transaction hashes.
+
+---
+
+## 🌐 3. Network & Deployment Configuration
 Use the configuration specified in \`deployment.config.json\` or \`deployment.json\` (configured via \`infrastructure/config/midnight-config.ts\`):
 - **Contract Name**: ${baseContractName}
 - **Contract Address**: ${config.contractAddress || DEFAULT_DEPLOYMENT_CONFIG.contractAddress}
@@ -177,44 +237,11 @@ ${saltSection}${ownerSection}${deployerSection}- **Network ID**: ${config.networ
 
 ---
 
-### 3. Core Modules to Build
-
-#### Module A: Midnight Wallet Connector (\`WalletContext.tsx\`)
-- Inspects \`window.midnight\` for installed Midnight wallet extensions (such as Lace Midnight Wallet).
-- Provides:
-  - \`connectWallet(walletName: string): Promise<void>\`
-  - \`disconnectWallet(): void\`
-  - \`isConnected: boolean\`
-  - \`accountAddress: string | null\`
-  - \`dustBalance: bigint | null\`
-  - \`networkId: string\`
-- Displays a clean wallet connection modal if \`window.midnight\` is missing or disconnected.
-
-#### Module B: Midnight Provider Assembly (\`midnight-providers.ts\`)
-Assemble the 5 essential Midnight providers into a unified \`MidnightProvider\`:
-1. **WalletProvider**: Derived from the connected Lace wallet instance via the DApp Connector API.
-2. **PublicDataProvider**: Configured with \`@midnight-ntwrk/midnight-js-indexer-public-data-provider\` pointing to the Indexer GraphQL URL to query and subscribe to contract states.
-3. **ProofProvider**: Configured with \`@midnight-ntwrk/midnight-js-http-client-proof-provider\` pointing to the proof server (\`${config.proofServerUrl}\`) or delegated proving via Lace.
-4. **ZKConfigProvider**: Serves the compiled ZKIR circuit bytecodes from \`public/zkir/${baseContractName}/\`.
-5. **PrivateStateProvider**: In-browser local private state manager for storing off-chain witness data.
-
-#### Module C: Contract Interaction Hooks (\`use${pascalName}.ts\`)
-- Custom React hook wrapping the contract SDK (\`src/client/${baseContractName}-sdk.ts\`).
-- Exposes callable circuit methods, transaction submission lifecycle states (\`syncing\`, \`balancing\`, \`proving\`, \`submitting\`, \`confirmed\`, \`error\`), and real-time state streams.
-- Shows live updates of public ledger state.
-
-#### Module D: User Interface Components
-- **Dashboard / Hero Card**: Contract overview displaying current contract address (\`${config.contractAddress}\`), active network (\`${config.networkId}\`), connection status, and public ledger statistics.
-- **Circuit Execution Forms**: Clean, validated input forms for executing circuits (e.g. transfer, mint, query) with instant parameter feedback.
-- **Live Transaction Stepper**: Real-time visual progress showing Proof Generation -> Transaction Balancing -> Block Inclusion -> On-Chain Confirmation with explorer link.
-- **Activity Log / Transaction Feed**: Historical and live transaction receipts with block heights and transaction hashes.
-
----
-
 ## 🚀 Execution Instructions
 1. Inspect the provided TypeScript contract interfaces and artifacts in \`contract/\`, \`sdk/\`, and \`deployment.config.json\`.
-2. Generate all required application source files with complete, working implementations.
-3. Ensure all types, imports, and provider configurations align with the Midnight Network specification.
+2. Generate all required application source files following the Clean Architecture layout (\`domain/\`, \`application/\`, \`infrastructure/\`, \`presentation/\`).
+3. Implement the UI with the persistent **Side Panel** navigation and comprehensive **Dashboard** page.
+4. Ensure all types, imports, and provider configurations align with the Midnight Network specification.
 `;
 }
 

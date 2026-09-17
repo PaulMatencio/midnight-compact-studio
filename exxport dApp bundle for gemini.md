@@ -54,7 +54,9 @@ Add a dedicated **"Export DApp Bundle for Gemini"** button and modal directly in
   }
   ```
 - Dynamically creates `GEMINI_DAPP_PROMPT.md` tailored specifically to the contract:
-  - Instructs Gemini step-by-step on building the Next.js (React 19) frontend.
+  - **1) Clean Architecture**: Enforces separation across Domain (`entities/`, `ports/` like `i-wallet.gateway.ts`, `i-contract.gateway.ts`, `i-activity.storage.ts`), Application (`use-cases/`), Infrastructure (`adapters/`, providers), and Presentation (`context/`, `hooks/`, `components/`).
+  - **2) UI Side Panel**: Mandates a persistent, collapsible left navigation sidebar with branding, network status badge, menu navigation (Dashboard, Circuits, Activity, Config), and bottom wallet status widget.
+  - **3) Comprehensive Dashboard**: Mandates a feature-rich central hub with token/user metrics, contract status cards, quick action triggers, and live transaction stepper/activity feed.
   - Explains the wallet connection via `window.midnight` (Lace / DApp Connector).
   - Outlines the 5-provider assembly (`WalletProvider`, `PublicDataProvider`, `ProofProvider`, `ZKConfigProvider`, `PrivateStateProvider`).
   - Instructs how to build custom React hooks (`useContractState`, `useCircuitAction`).

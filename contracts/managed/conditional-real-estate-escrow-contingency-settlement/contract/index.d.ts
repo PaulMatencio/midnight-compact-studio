@@ -1,10 +1,7 @@
 import type * as __compactRuntime from '@midnight-ntwrk/compact-runtime';
 
 export type Witnesses<PS> = {
-  getBuyerSecret(context: __compactRuntime.WitnessContext<Ledger, PS>): [PS, Uint8Array];
-  getSellerSecret(context: __compactRuntime.WitnessContext<Ledger, PS>): [PS, Uint8Array];
-  getInspectorSecret(context: __compactRuntime.WitnessContext<Ledger, PS>): [PS, Uint8Array];
-  getTitleAgentSecret(context: __compactRuntime.WitnessContext<Ledger, PS>): [PS, Uint8Array];
+  getCallerSecret(context: __compactRuntime.WitnessContext<Ledger, PS>): [PS, Uint8Array];
 }
 
 export type ImpureCircuits<PS> = {
@@ -50,6 +47,7 @@ export type Circuits<PS> = {
 }
 
 export type Ledger = {
+  readonly _contractSalt: Uint8Array;
   readonly buyerPk: Uint8Array;
   readonly sellerPk: Uint8Array;
   readonly inspectorPk: Uint8Array;
@@ -57,8 +55,11 @@ export type Ledger = {
   readonly propertyHash: Uint8Array;
   readonly purchasePrice: bigint;
   readonly escrowDeposit: bigint;
+  readonly inspectionSubmitted: boolean;
   readonly inspectionPassed: boolean;
+  readonly financingSubmitted: boolean;
   readonly financingApproved: boolean;
+  readonly titleSubmitted: boolean;
   readonly titleCleared: boolean;
   readonly status: number;
 }
@@ -80,7 +81,8 @@ export declare class Contract<PS = any, W extends Witnesses<PS> = Witnesses<PS>>
                _titleAgentPk_0: Uint8Array,
                _propertyHash_0: Uint8Array,
                _purchasePrice_0: bigint,
-               _escrowDeposit_0: bigint): __compactRuntime.ConstructorResult<PS>;
+               _escrowDeposit_0: bigint,
+               _salt_0: Uint8Array): __compactRuntime.ConstructorResult<PS>;
 }
 
 export declare function ledger(state: __compactRuntime.StateValue | __compactRuntime.ChargedState): Ledger;
