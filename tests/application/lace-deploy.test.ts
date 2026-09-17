@@ -132,6 +132,38 @@ describe('Lace Browser Deployment Architecture', () => {
                 balanceAndSubmitLaceTx(mockApi as any, 'hex', () => {})
             ).rejects.toThrow(/insufficient DUST.*Wallet\.InsufficientFunds.*available: 0.*required: 300000000000001/);
         });
+
+        it('falls back to backend node broadcast when Lace submitTransaction fails', async () => {
+            const mockApi = {
+                balanceUnsealedTransaction: vi.fn().mockResolvedValue('balanced-tx-hex-string'),
+                submitTransaction: vi.fn().mockRejectedValue(new Error('Lace submit failed')),
+            };
+
+            const originalFetch = global.fetch;
+            global.fetch = vi.fn().mockResolvedValue({
+                ok: true,
+                json: async () => ({
+                    success: true,
+                    data: { txHash: 'node-broadcast-tx-hash-999' },
+                }),
+            } as any);
+
+            try {
+                const result = await balanceAndSubmitLaceTx(
+                    mockApi as any,
+                    'unsealed-hex',
+                    () => {}
+                );
+
+                expect(result.txHash).toBe('node-broadcast-tx-hash-999');
+                expect(global.fetch).toHaveBeenCalledWith('/api/contract/broadcast', expect.objectContaining({
+                    method: 'POST',
+                    body: JSON.stringify({ balancedTxHex: 'balanced-tx-hex-string' }),
+                }));
+            } finally {
+                global.fetch = originalFetch;
+            }
+        });
     });
 });
 

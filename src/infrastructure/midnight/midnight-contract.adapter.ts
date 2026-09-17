@@ -910,5 +910,44 @@ export class MidnightContractAdapter implements IContractGateway {
             lastChecked: new Date().toISOString(),
         };
     }
+
+    async broadcastTransaction(balancedTxHex: string): Promise<{ txHash: string }> {
+        if (!balancedTxHex || typeof balancedTxHex !== 'string') {
+            throw new Error('balancedTxHex string is required for broadcast.');
+        }
+
+        const cleanHex = balancedTxHex.replace(/^0x/, '').trim();
+        const bytes = new Uint8Array(Buffer.from(cleanHex, 'hex'));
+        const { Transaction } = await import('@midnight-ntwrk/ledger-v8');
+        const txObj = Transaction.deserialize('signature', 'proof', 'binding', bytes);
+        const txIds = txObj.identifiers();
+        const txHash = txIds && txIds.length > 0 ? txIds[0] : String(txObj.transactionHash());
+
+        console.log(`[DeployAdapter] Broadcasting pre-balanced transaction ${txHash} to Midnight node RPC...`);
+
+        const effectiveSeed = process.env.WALLET_SEED?.trim() || process.env.MIDNIGHT_WALLET_SEED?.trim() || 'bfddeea52c8e16ebc8b278f4bb5a76604982046d690e7c6f3139831c6888861d';
+        const walletCtx = await this.walletGateway.getOrCreateWalletContext(effectiveSeed);
+
+        try {
+            const submittedId = await walletCtx.wallet.submitTransaction(txObj);
+            const finalHash = typeof submittedId === 'string' ? submittedId : (submittedId?.toString?.() || txHash);
+            console.log(`[DeployAdapter] Pre-balanced transaction accepted by node! ID: ${finalHash}`);
+            return { txHash: finalHash };
+        } catch (err: any) {
+            const errMsg = err?.message || String(err);
+            console.error('[DeployAdapter] Error broadcasting pre-balanced transaction to node:', err);
+            if (errMsg.includes('170') || errMsg.includes('InvalidDustSpendProof')) {
+                throw new Error(
+                    'Substrate Node Error 170 (InvalidDustSpendProof): The transaction was rejected because your Lace wallet internal DUST Merkle tree is out of sync with the Preprod network. Please resync or reset your Lace extension wallet.'
+                );
+            }
+            if (errMsg.includes('171') || errMsg.includes('OutOfDustValidityWindow')) {
+                throw new Error(
+                    'Substrate Node Error 171 (OutOfDustValidityWindow): The transaction expired before reaching the node. Please re-submit.'
+                );
+            }
+            throw new Error(`Node rejected transaction: ${errMsg}`);
+        }
+    }
 }
 

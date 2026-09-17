@@ -257,16 +257,46 @@ export class MidnightWalletAdapter implements IWalletGateway {
         const shieldedProgress = (state as any)?.shielded?.progress;
         const dustProgress = (state as any)?.dust?.progress;
 
+        const findHighest = (...items: any[]): bigint => {
+            for (const item of items) {
+                if (item !== undefined && item !== null) {
+                    try {
+                        const val = BigInt(item.toString());
+                        if (val > 0n) return val;
+                    } catch {}
+                }
+            }
+            return 0n;
+        };
+
         const unshieldedApplied = BigInt((unshieldedProgress?.appliedIndex ?? unshieldedProgress?.appliedId ?? unshieldedProgress?.appliedTransactionId ?? 0).toString());
-        const unshieldedHighest = BigInt((unshieldedProgress?.highestRelevantIndex ?? unshieldedProgress?.highestIndex ?? unshieldedProgress?.highestTransactionId ?? 0).toString());
+        const unshieldedHighest = findHighest(
+            unshieldedProgress?.highestRelevantWalletIndex,
+            unshieldedProgress?.highestRelevantIndex,
+            unshieldedProgress?.highestIndex,
+            unshieldedProgress?.highestTransactionId
+        );
         const isUnshieldedStrictlyComplete = typeof unshieldedProgress?.isStrictlyComplete === 'function' ? unshieldedProgress.isStrictlyComplete() : false;
 
         const shieldedApplied = BigInt((shieldedProgress?.appliedIndex ?? shieldedProgress?.appliedId ?? shieldedProgress?.appliedTransactionId ?? 0).toString());
-        const shieldedHighest = BigInt((shieldedProgress?.highestRelevantIndex ?? shieldedProgress?.highestIndex ?? shieldedProgress?.highestRelevantWalletIndex ?? shieldedProgress?.highestTransactionId ?? 0).toString());
+        const shieldedHighest = findHighest(
+            shieldedProgress?.highestRelevantWalletIndex,
+            shieldedProgress?.highestRelevantIndex,
+            shieldedProgress?.highestIndex,
+            shieldedProgress?.highestTransactionId,
+            shieldedApplied
+        );
         const isShieldedStrictlyComplete = typeof shieldedProgress?.isStrictlyComplete === 'function' ? shieldedProgress.isStrictlyComplete() : false;
 
         const dustApplied = BigInt((dustProgress?.appliedIndex ?? dustProgress?.appliedId ?? dustProgress?.appliedTransactionId ?? 0).toString());
-        const dustHighest = BigInt((dustProgress?.highestRelevantIndex ?? dustProgress?.highestIndex ?? dustProgress?.highestRelevantWalletIndex ?? dustProgress?.highestTransactionId ?? 0).toString());
+        const dustHighest = findHighest(
+            dustProgress?.highestRelevantWalletIndex,
+            dustProgress?.highestRelevantIndex,
+            dustProgress?.highestIndex,
+            dustProgress?.highestTransactionId,
+            shieldedHighest > 0n ? shieldedHighest : shieldedApplied,
+            unshieldedHighest > 0n ? unshieldedHighest : unshieldedApplied
+        );
         const isDustStrictlyComplete = typeof dustProgress?.isStrictlyComplete === 'function' ? dustProgress.isStrictlyComplete() : false;
 
         const isConnected = unshieldedProgress?.isConnected ?? shieldedProgress?.isConnected ?? dustProgress?.isConnected ?? true;

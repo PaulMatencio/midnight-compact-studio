@@ -962,8 +962,12 @@ export default function DeployPage() {
                                                 <p className="text-[10px] text-slate-300 leading-tight">
                                                     Server wallet pays ~0.0003 DUST gas fee. Zero extension errors. Lace retains 100% on-chain contract ownership.
                                                 </p>
-                                                <div className="mt-2 text-[10px] text-emerald-400 font-mono">
-                                                    {backendWalletStatus?.dustDisplay || backendDustBalance.toLocaleString()} DUST Ready
+                                                <div className={`mt-2 text-[10px] font-mono ${isBackendReady ? 'text-emerald-400' : 'text-amber-400'}`}>
+                                                    {isBackendReady
+                                                        ? `${backendWalletStatus?.dustDisplay || backendDustBalance.toLocaleString()} DUST Ready`
+                                                        : backendWalletStatus?.syncProgress?.dust
+                                                            ? `DUST Syncing (${backendWalletStatus.syncProgress.dust.percentage}%) • 0 DUST Available`
+                                                            : '0 DUST Available'}
                                                 </div>
                                             </div>
 
@@ -1121,10 +1125,19 @@ export default function DeployPage() {
                             {!['preparing', 'proving', 'balancing', 'submitting', 'indexing'].includes(stage) && (
                                 isExtensionMode ? (
                                     gasPayerMode === 'studio' ? (
-                                        <>
-                                            <Rocket className="h-4 w-4" />
-                                            <span>Deploy {selectedBlueprint.name} (Lace Owner • Studio Gas)</span>
-                                        </>
+                                        !isBackendReady ? (
+                                            <>
+                                                <Fuel className="h-4 w-4 text-amber-300" />
+                                                <span>
+                                                    Studio Gas Not Ready ({backendWalletStatus?.syncProgress?.dust ? `DUST ${backendWalletStatus.syncProgress.dust.percentage}%` : '0 DUST'}) — Select Lace Direct Gas or Wait for Sync
+                                                </span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Rocket className="h-4 w-4" />
+                                                <span>Deploy {selectedBlueprint.name} (Lace Owner • Studio Gas)</span>
+                                            </>
+                                        )
                                     ) : (
                                         <>
                                             <Rocket className="h-4 w-4" />

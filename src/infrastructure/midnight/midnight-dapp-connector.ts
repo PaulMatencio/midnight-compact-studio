@@ -614,9 +614,10 @@ export function formatLaceError(err: any): string {
 
         const unwrapCause = (c: any): any => {
             if (!c) return null;
-            if (c.failure !== undefined) return c.failure;
-            if (c.error !== undefined) return c.error;
-            if (c.defect !== undefined) return c.defect;
+            if (c.failure !== undefined) return unwrapCause(c.failure);
+            if (c.error !== undefined) return unwrapCause(c.error);
+            if (c.defect !== undefined) return unwrapCause(c.defect);
+            if (c.cause !== undefined) return unwrapCause(c.cause);
             if (c.left !== undefined) return unwrapCause(c.left) || unwrapCause(c.right);
             if (c.right !== undefined) return unwrapCause(c.right);
             return c;
@@ -625,6 +626,18 @@ export function formatLaceError(err: any): string {
         const inner = unwrapCause(cause);
         if (inner) {
             if (typeof inner === 'string' && inner.trim()) return inner.trim();
+            // If inner is SubmissionError with a deeper cause, extract the deep cause
+            let rootMsg = '';
+            if (inner.cause) {
+                const subCause = unwrapCause(inner.cause);
+                if (typeof subCause === 'string' && subCause.trim()) rootMsg = subCause.trim();
+                else if (subCause?.message && typeof subCause.message === 'string') rootMsg = subCause.message.trim();
+                else if (subCause?.reason && typeof subCause.reason === 'string') rootMsg = subCause.reason.trim();
+            }
+            if (rootMsg && rootMsg !== 'Transaction submission error') {
+                const tag = inner._tag ? `[${inner._tag}] ` : '';
+                return `${tag}${inner.message ? `${inner.message}: ` : ''}${rootMsg}`;
+            }
             if (inner.message && typeof inner.message === 'string' && inner.message.trim()) {
                 const tag = inner._tag ? `[${inner._tag}] ` : '';
                 return `${tag}${inner.message.trim()}`;
@@ -783,6 +796,8 @@ export async function balanceAndSubmitLaceTx(
     console.log('[Midnight Lace Connector] Calling api.submitTransaction...');
 
     let txHash: string | undefined;
+    let laceBroadcastErr: any = null;
+
     if (typeof api.submitTransaction === 'function') {
         try {
             const res = await api.submitTransaction(balancedTxHex);
@@ -790,8 +805,46 @@ export async function balanceAndSubmitLaceTx(
                 txHash = res.trim();
             }
         } catch (submitErr: any) {
-            console.error('[Midnight Lace Connector] Error during submitTransaction:', submitErr);
-            throw new Error(`Failed to broadcast transaction via Lace: ${formatLaceError(submitErr)}`);
+            laceBroadcastErr = submitErr;
+            console.warn('[Midnight Lace Connector] Lace api.submitTransaction failed, attempting backend Node RPC broadcast fallback...', {
+                err: submitErr,
+                message: submitErr?.message,
+                cause: submitErr?.cause,
+                name: submitErr?.name,
+            });
+        }
+    }
+
+    // Fallback: If Lace submitTransaction failed or was unavailable, broadcast via Studio backend Midnight Node RPC
+    if (!txHash) {
+        onProgress?.('Broadcasting transaction via Studio Node RPC fallback...');
+        console.log('[Midnight Lace Connector] Broadcasting balanced transaction via /api/contract/broadcast...');
+        try {
+            const broadcastRes = await fetch('/api/contract/broadcast', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ balancedTxHex }),
+            });
+            const broadcastJson = await broadcastRes.json();
+            if (broadcastRes.ok && broadcastJson.success && broadcastJson.data?.txHash) {
+                txHash = broadcastJson.data.txHash;
+                console.log('[Midnight Lace Connector] Transaction successfully broadcasted via backend Node RPC! TxHash:', txHash);
+            } else {
+                const nodeMsg = broadcastJson.error || '';
+                console.error('[Midnight Lace Connector] Backend Node broadcast also rejected transaction:', nodeMsg);
+                if (laceBroadcastErr) {
+                    throw new Error(`Broadcast failed via Lace (${formatLaceError(laceBroadcastErr)}) and Node RPC: ${nodeMsg}`);
+                }
+                throw new Error(`Failed to broadcast transaction: ${nodeMsg || 'Node rejected extrinsic'}`);
+            }
+        } catch (fbErr: any) {
+            if (fbErr?.message?.includes('Broadcast failed') || fbErr?.message?.includes('Failed to broadcast transaction')) {
+                throw fbErr;
+            }
+            if (laceBroadcastErr) {
+                throw new Error(`Failed to broadcast transaction via Lace: ${formatLaceError(laceBroadcastErr)}`);
+            }
+            throw fbErr;
         }
     }
 

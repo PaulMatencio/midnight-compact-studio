@@ -45,6 +45,7 @@ export interface IContractGateway {
     ): Promise<TransactionExecutionReceipt>;
     deployContract(seed: string, options?: DeployContractOptions): Promise<DeploymentExecutionReceipt>;
     prepareDeploy(options: PrepareDeployOptions): Promise<PreparedDeployData>;
+    broadcastTransaction(balancedTxHex: string): Promise<{ txHash: string }>;
     recordDeployment(options: RecordDeploymentOptions): Promise<DeploymentExecutionReceipt>;
     getContractState(contractAddress?: string): Promise<ContractMessageSnapshot>;
 }
