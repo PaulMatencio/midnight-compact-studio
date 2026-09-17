@@ -8,6 +8,8 @@ import { FilePrivateStateProvider } from '@/src/lib/file-private-state-provider'
 import { MIDNIGHT_CONFIG } from '../config/midnight.config';
 import { formatDustFee } from '@/src/lib/dust-utils';
 
+import { MidnightBech32m } from '@midnight-ntwrk/wallet-sdk-address-format';
+
 // Ensure WebSocket is globally available for GraphQL subscriptions
 if (typeof (globalThis as any).WebSocket === 'undefined') {
     (globalThis as any).WebSocket = WebSocket;
@@ -30,7 +32,6 @@ function normalizeKeyToHex(input?: string): string | undefined {
     }
     if (clean.startsWith('mn_') || clean.startsWith('midnight')) {
         try {
-            const { MidnightBech32m } = require('@midnight-ntwrk/wallet-sdk-address-format');
             const parsed = MidnightBech32m.parse(clean);
             if (parsed?.data && parsed.data.length === 32) {
                 return Buffer.from(parsed.data).toString('hex').toLowerCase();

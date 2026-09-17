@@ -114,7 +114,16 @@ export class MidnightWalletAdapter implements IWalletGateway {
             costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 },
         };
 
-        const savedState = await this.walletStateStorage.loadState(bech32Address).catch(() => null);
+        let savedState = await this.walletStateStorage.loadState(bech32Address).catch(() => null);
+        if (savedState?.updatedAt) {
+            const ageMs = Date.now() - new Date(savedState.updatedAt).getTime();
+            const MAX_CHECKPOINT_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+            if (isNaN(ageMs) || ageMs > MAX_CHECKPOINT_AGE_MS || process.env.WALLET_FORCE_FRESH_SYNC === 'true') {
+                console.warn(`[MidnightWalletAdapter] Stored wallet checkpoint for ${bech32Address} is stale or reset requested (${savedState.updatedAt}). Discarding to prevent testnet tree divergence.`);
+                await this.walletStateStorage.clearState(bech32Address).catch(() => {});
+                savedState = null;
+            }
+        }
 
         const wallet = await WalletFacade.init({
             configuration: walletConfig,
@@ -186,13 +195,42 @@ export class MidnightWalletAdapter implements IWalletGateway {
             next: (s: any) => {
                 ctx.latestState = s;
             },
-            error: (err: any) => {
-                console.warn('Wallet state stream warning:', err);
+            error: async (err: any) => {
+                const msg = err?.message || String(err);
+                console.warn('[MidnightWalletAdapter] Wallet state stream warning:', msg);
+                if (msg.includes('non-linearly') || msg.includes('commitment tree')) {
+                    console.error('[MidnightWalletAdapter] Detected non-linear tree insertion error. Auto-healing by clearing stale checkpoint and cache.');
+                    await this.clearStoredState(trimmedSeed).catch(() => {});
+                }
             },
         });
 
         this.walletCache.set(trimmedSeed, ctx);
         return ctx;
+    }
+
+    evictWallet(seed: string): void {
+        const trimmedSeed = seed.trim();
+        this.walletCache.delete(trimmedSeed);
+    }
+
+    async clearStoredState(seed: string): Promise<void> {
+        const trimmedSeed = seed.trim();
+        this.evictWallet(trimmedSeed);
+        try {
+            const keys = deriveKeysInternal(trimmedSeed);
+            const networkId = getNetworkId();
+            const unshieldedKeystore = createKeystore(keys[Roles.NightExternal], networkId);
+            const bech32Address = unshieldedKeystore.getBech32Address().toString();
+            await this.walletStateStorage.clearState(bech32Address);
+            if (fs.existsSync(this.cacheFilePath)) {
+                try {
+                    fs.unlinkSync(this.cacheFilePath);
+                } catch {}
+            }
+        } catch (e) {
+            console.warn('[MidnightWalletAdapter] Error clearing stored state:', e);
+        }
     }
 
     async getWalletStatus(seed: string): Promise<WalletSnapshot> {
@@ -236,26 +274,28 @@ export class MidnightWalletAdapter implements IWalletGateway {
         const calcPercentage = (applied: bigint, highest: bigint, isStrictlyComplete: boolean): number => {
             if (isStrictlyComplete) return 100;
             if (highest <= 0n) {
-                return applied > 0n ? 100 : 0;
+                return isStrictlyComplete ? 100 : 0;
             }
             if (applied >= highest) return 100;
-            return Math.min(100, Math.max(0, Math.round((Number(applied) / Number(highest)) * 100)));
+            return Math.min(99, Math.max(0, Math.round((Number(applied) / Number(highest)) * 100)));
         };
 
         const pUnshielded = calcPercentage(unshieldedApplied, unshieldedHighest, isUnshieldedStrictlyComplete);
         const pShielded = calcPercentage(shieldedApplied, shieldedHighest, isShieldedStrictlyComplete);
         const pDust = calcPercentage(dustApplied, dustHighest, isDustStrictlyComplete);
 
-        const isFullySynced = isSynced || (
-            (isUnshieldedStrictlyComplete || pUnshielded === 100) &&
-            (isShieldedStrictlyComplete || pShielded === 100) &&
-            (isDustStrictlyComplete || pDust === 100)
+        const isFullySynced = Boolean(isSynced) || (
+            (isUnshieldedStrictlyComplete || (unshieldedHighest > 0n && unshieldedApplied >= unshieldedHighest)) &&
+            (isShieldedStrictlyComplete || (shieldedHighest > 0n && shieldedApplied >= shieldedHighest)) &&
+            (isDustStrictlyComplete || (dustHighest > 0n && dustApplied >= dustHighest))
         );
 
-        let overallPercentage = isFullySynced ? 100 : Math.floor((pUnshielded + pShielded + pDust) / 3);
+        let overallPercentage = isFullySynced ? 100 : Math.min(99, Math.floor((pUnshielded + pShielded + pDust) / 3));
         if (overallPercentage >= 100 && !isFullySynced) {
             overallPercentage = 99;
         }
+
+        const effectiveSynced = isFullySynced;
 
         const bech32Address = walletCtx.unshieldedKeystore.getBech32Address().toString();
         const coinPublicKey = walletCtx.shieldedSecretKeys.coinPublicKey;
@@ -267,9 +307,9 @@ export class MidnightWalletAdapter implements IWalletGateway {
         });
 
         const snapshot: WalletSnapshot = {
-            isSynced,
+            isSynced: effectiveSynced,
             syncProgress: {
-                isSynced,
+                isSynced: effectiveSynced,
                 percentage: overallPercentage,
                 appliedId: unshieldedApplied.toString(),
                 highestTransactionId: unshieldedHighest.toString(),
@@ -310,7 +350,10 @@ export class MidnightWalletAdapter implements IWalletGateway {
 
     async registerForDust(seed: string): Promise<RegisterDustResult> {
         const walletCtx = await this.getOrCreateWalletContext(seed);
-        await walletCtx.wallet.waitForSyncedState();
+        await Promise.race([
+            walletCtx.wallet.waitForSyncedState(),
+            new Promise((r) => setTimeout(r, 3000)),
+        ]);
 
         const state: any = await Rx.firstValueFrom(
             walletCtx.wallet.state().pipe(
@@ -368,7 +411,8 @@ export class MidnightWalletAdapter implements IWalletGateway {
         const amountUnits = BigInt(Math.floor(amtNum * 1_000_000));
 
         const status = await this.getWalletStatus(seed);
-        if (!status.isSynced) {
+        const isSynced = Boolean(status.isSynced) || (status.syncProgress?.percentage ?? 0) >= 100;
+        if (!isSynced) {
             throw new WalletNotSyncedError(status.syncProgress?.percentage);
         }
 
@@ -379,7 +423,10 @@ export class MidnightWalletAdapter implements IWalletGateway {
 
         const walletCtx = await this.getOrCreateWalletContext(seed);
         const wallet = walletCtx.wallet;
-        await wallet.waitForSyncedState();
+        await Promise.race([
+            wallet.waitForSyncedState(),
+            new Promise((r) => setTimeout(r, 3000)),
+        ]);
 
         const networkId = getNetworkId();
         let receiverAddress: UnshieldedAddress;

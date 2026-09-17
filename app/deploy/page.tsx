@@ -119,8 +119,8 @@ export default function DeployPage() {
     }, [selectedBlueprint, isExtensionConnected, extensionAddress, walletStatus?.unshieldedAddress]);
 
     const isExtensionMode = connectionMode === 'extension' && isExtensionConnected && Boolean(extensionApi);
-    const isSynced = isExtensionMode ? true : (walletStatus?.isSynced ?? false);
     const syncPercentage = walletStatus?.syncProgress?.percentage ?? 0;
+    const isSynced = isExtensionMode ? true : (Boolean(walletStatus?.isSynced) || syncPercentage >= 100);
     const dustBalance = BigInt(walletStatus?.dustBalance || '0');
 
     const [copiedDeployer, setCopiedDeployer] = useState(false);
@@ -458,7 +458,7 @@ export default function DeployPage() {
             return;
         }
 
-        if (!isSynced) {
+        if (!isSynced && syncPercentage < 100) {
             const err = `Wallet is synchronizing (${syncPercentage}%). Please wait for 100% sync.`;
             setErrorMsg(err);
             setStage('error');
@@ -815,7 +815,7 @@ export default function DeployPage() {
                         </div>
 
                         {/* Sync Warning if not ready */}
-                        {!isSynced && (
+                        {!isSynced && syncPercentage < 100 && (
                             <div className="flex items-center space-x-2 rounded-xl bg-amber-500/10 border border-amber-500/30 p-3 text-xs text-amber-300">
                                 <AlertCircle className="h-4 w-4 shrink-0" />
                                 <span>Wallet is syncing ({syncPercentage}%). Action enabled at 100% sync.</span>

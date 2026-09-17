@@ -1,0 +1,9 @@
+Caller Secret Key (sk) [32 bytes]
+        |
+        +---> Domain Tag: pad(32, "fungible-token:auth")
+        |
+        +---> Contract Salt: _contractSalt [32 bytes]
+        |
+        v
+  persistentHash([DomainTag, ContractSalt, sk])
+        = Derived On-Chain Account Commitment [Bytes<32>]

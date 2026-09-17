@@ -125,6 +125,7 @@ export function deriveAccountForContract(
     try {
         const dummyContract = new ContractClass({
             localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)],
+            getSchnorrReduction: (ctx: any) => [ctx.privateState, [0n, 0n]],
         });
         if (typeof (dummyContract as any)._persistentHash_1 === 'function') {
             try {
@@ -231,7 +232,8 @@ export class MidnightContractAdapter implements IContractGateway {
         }
 
         const status = await this.walletGateway.getWalletStatus(seed);
-        if (!status.isSynced) {
+        const isSynced = Boolean(status.isSynced) || (status.syncProgress?.percentage ?? 0) >= 100;
+        if (!isSynced) {
             throw new WalletNotSyncedError(status.syncProgress?.percentage);
         }
 
@@ -241,7 +243,10 @@ export class MidnightContractAdapter implements IContractGateway {
         }
 
         const walletCtx = await this.walletGateway.getOrCreateWalletContext(seed);
-        await walletCtx.wallet.waitForSyncedState();
+        await Promise.race([
+            walletCtx.wallet.waitForSyncedState(),
+            new Promise((r) => setTimeout(r, 3000)),
+        ]);
 
         const { compiledContract, zkConfigPath } = await this.getContractArtifacts(contractType, walletCtx);
         const providers = createProviders(walletCtx, { zkConfigPath });
@@ -259,7 +264,26 @@ export class MidnightContractAdapter implements IContractGateway {
         }
 
         const startTime = Date.now();
-        const tx = await circuitFn(...args);
+        let tx: any;
+        try {
+            tx = await circuitFn(...args);
+        } catch (err: any) {
+            const errMsg = err?.message || String(err);
+            console.error(`[ContractAdapter] Execution error for '${circuitName}':`, err);
+            if (
+                errMsg.includes('170') ||
+                errMsg.includes('InvalidDustSpendProof') ||
+                errMsg.includes('Transaction submission error') ||
+                errMsg.includes('non-linearly')
+            ) {
+                console.warn('[ContractAdapter] Detected invalid DUST spend proof (error 170). Evicting wallet and clearing state for auto-recovery...');
+                await this.walletGateway.clearStoredState(seed).catch(() => {});
+                throw new Error(
+                    `Transaction submission error: Invalid DUST spend proof (Node Error 170). The wallet commitment tree was desynchronized from the network. Corrupted wallet state has been cleared. Please re-try '${circuitName}' in a few moments.`
+                );
+            }
+            throw err;
+        }
         const durationMs = Date.now() - startTime;
         const dustPaid = walletCtx.lastDustFee ? walletCtx.lastDustFee.toString() : '0';
 
@@ -310,7 +334,8 @@ export class MidnightContractAdapter implements IContractGateway {
         }
 
         const status = await this.walletGateway.getWalletStatus(seed);
-        if (!status.isSynced) {
+        const isSynced = Boolean(status.isSynced) || (status.syncProgress?.percentage ?? 0) >= 100;
+        if (!isSynced) {
             throw new WalletNotSyncedError(status.syncProgress?.percentage);
         }
 
@@ -320,7 +345,10 @@ export class MidnightContractAdapter implements IContractGateway {
         }
 
         const walletCtx = await this.walletGateway.getOrCreateWalletContext(seed);
-        await walletCtx.wallet.waitForSyncedState();
+        await Promise.race([
+            walletCtx.wallet.waitForSyncedState(),
+            new Promise((r) => setTimeout(r, 3000)),
+        ]);
 
         const { compiledContract, zkConfigPath, ContractClass } = await this.getContractArtifacts(contractType, walletCtx);
 
@@ -341,12 +369,31 @@ export class MidnightContractAdapter implements IContractGateway {
         console.log(`[DeployAdapter] Resolved ${resolvedArgs.length} constructor arguments.`);
 
         const startTime = Date.now();
-        const deployed = await deployContract(providers as any, {
-            compiledContract: compiledContract as any,
-            args: resolvedArgs,
-            privateStateId: `${contractType}State`,
-            initialPrivateState: {},
-        });
+        let deployed: any;
+        try {
+            deployed = await deployContract(providers as any, {
+                compiledContract: compiledContract as any,
+                args: resolvedArgs,
+                privateStateId: `${contractType}State`,
+                initialPrivateState: {},
+            });
+        } catch (err: any) {
+            const errMsg = err?.message || String(err);
+            console.error(`[DeployAdapter] Deployment error for '${contractType}':`, err);
+            if (
+                errMsg.includes('170') ||
+                errMsg.includes('InvalidDustSpendProof') ||
+                errMsg.includes('Transaction submission error') ||
+                errMsg.includes('non-linearly')
+            ) {
+                console.warn('[DeployAdapter] Detected invalid DUST spend proof or tree divergence (error 170). Evicting wallet and clearing state for auto-recovery...');
+                await this.walletGateway.clearStoredState(seed).catch(() => {});
+                throw new Error(
+                    'Transaction submission error: Invalid DUST spend proof (Node Error 170). The wallet commitment tree was desynchronized from the network. Corrupted wallet state has been cleared and reset. Please re-try deployment in a few moments once the wallet re-syncs.'
+                );
+            }
+            throw err;
+        }
 
         const contractAddress = deployed.deployTxData.public.contractAddress;
         const txHash = (deployed as any).deployTxData?.txHash || (deployed as any).txHash;
@@ -485,8 +532,58 @@ export class MidnightContractAdapter implements IContractGateway {
                 userVal = userArgs[param.name] ?? userArgs[cleanName];
             }
 
+            const isVectorParam = param.compactType?.startsWith('Vector') ||
+                param.description?.startsWith('Vector') ||
+                cleanName.toLowerCase().includes('signers');
+
             if (cleanName.toLowerCase().includes('salt') || param.label?.toLowerCase().includes('salt')) {
                 resolvedArgs.push(activeContractSalt);
+            } else if (isVectorParam) {
+                const vectorMatch = param.compactType?.match(/Vector<\s*(\d+)\s*,\s*(.+)\s*>/);
+                const vectorLen = vectorMatch ? parseInt(vectorMatch[1], 10) : 3;
+                const elemType = vectorMatch ? vectorMatch[2] : 'Bytes<32>';
+
+                if (elemType.includes('Bytes') || elemType.includes('Uint8Array') || cleanName.toLowerCase().includes('signers')) {
+                    const signers: Uint8Array[] = [];
+                    if (Array.isArray(userVal)) {
+                        for (const item of userVal) {
+                            if (item instanceof Uint8Array && item.length === 32) {
+                                signers.push(item);
+                            } else if (typeof item === 'string' && /^[0-9a-fA-F]{64}$/.test(item.replace(/^0x/, ''))) {
+                                signers.push(new Uint8Array(Buffer.from(item.replace(/^0x/, ''), 'hex')));
+                            }
+                        }
+                    } else if (typeof userVal === 'string' && userVal.trim()) {
+                        const parts = userVal.split(/[\s,]+/).map((s) => s.trim().replace(/^0x/, '')).filter(Boolean);
+                        for (const part of parts) {
+                            if (/^[0-9a-fA-F]{64}$/.test(part)) {
+                                signers.push(new Uint8Array(Buffer.from(part, 'hex')));
+                            }
+                        }
+                    }
+
+                    // Ensure we have exactly vectorLen unique 32-byte elements
+                    while (signers.length < vectorLen) {
+                        const idx = signers.length + 1;
+                        const uniqueBytes = crypto.createHash('sha256')
+                            .update(activeContractSalt)
+                            .update(`multisig:initial-signer:${idx}`)
+                            .digest();
+                        signers.push(new Uint8Array(uniqueBytes));
+                    }
+                    resolvedArgs.push(signers.slice(0, vectorLen));
+                } else if (elemType.includes('Uint') || elemType.includes('Field')) {
+                    let nums: bigint[] = [];
+                    if (Array.isArray(userVal)) {
+                        nums = userVal.map((v) => BigInt(v));
+                    }
+                    while (nums.length < vectorLen) {
+                        nums.push(0n);
+                    }
+                    resolvedArgs.push(nums.slice(0, vectorLen));
+                } else {
+                    resolvedArgs.push(Array.isArray(userVal) ? userVal : []);
+                }
             } else if (param.type === 'address' || param.compactType?.includes('Bytes') || param.description?.includes('Uint8Array')) {
                 const isOwnerOrAuthParam = param.name.toLowerCase().includes('owner') ||
                     param.name.toLowerCase().includes('admin') ||
@@ -554,12 +651,19 @@ export class MidnightContractAdapter implements IContractGateway {
                     resolvedArgs.push(deployerKeyBytes);
                 }
             } else if (param.type === 'number' || param.compactType?.includes('Uint') || param.compactType?.includes('Field')) {
+                const isThresholdParam = cleanName.toLowerCase().includes('threshold') || param.label?.toLowerCase().includes('threshold');
                 if (typeof userVal === 'bigint') {
-                    resolvedArgs.push(userVal);
+                    resolvedArgs.push(isThresholdParam && userVal <= 0n ? 2n : userVal);
                 } else if (typeof userVal === 'number') {
-                    resolvedArgs.push(BigInt(userVal));
+                    const valBigInt = BigInt(userVal);
+                    resolvedArgs.push(isThresholdParam && valBigInt <= 0n ? 2n : valBigInt);
                 } else if (typeof userVal === 'string' && userVal.trim()) {
-                    resolvedArgs.push(BigInt(userVal.trim()));
+                    const parsed = BigInt(userVal.trim());
+                    resolvedArgs.push(isThresholdParam && parsed <= 0n ? 2n : parsed);
+                } else if (isThresholdParam) {
+                    resolvedArgs.push(2n);
+                } else if (cleanName.toLowerCase().includes('decimal')) {
+                    resolvedArgs.push(6n);
                 } else {
                     resolvedArgs.push(0n);
                 }
@@ -574,7 +678,13 @@ export class MidnightContractAdapter implements IContractGateway {
                     resolvedArgs.push({ is_some: false, value: '' });
                 }
             } else {
-                resolvedArgs.push(userVal !== undefined ? userVal : '');
+                let defaultStr = '';
+                if (cleanName.toLowerCase().includes('name') && (!userVal || typeof userVal !== 'string' || userVal.trim() === '')) {
+                    defaultStr = 'Midnight Compact Token';
+                } else if (cleanName.toLowerCase().includes('symbol') && (!userVal || typeof userVal !== 'string' || userVal.trim() === '')) {
+                    defaultStr = 'MCT';
+                }
+                resolvedArgs.push(userVal !== undefined && userVal !== '' ? userVal : defaultStr);
             }
         }
 

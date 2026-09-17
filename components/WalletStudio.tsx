@@ -219,7 +219,7 @@ export const WalletStudio: React.FC<WalletStudioProps> = ({
                   <RefreshCw className="h-3 w-3 animate-spin text-slate-400" />
                   <span>Connecting...</span>
                 </span>
-              ) : walletStatus?.isSynced || isExtensionConnected ? (
+              ) : walletStatus?.isSynced || (walletStatus?.syncProgress?.percentage ?? 0) >= 100 || isExtensionConnected ? (
                 <button
                   onClick={onOpenSyncDashboard}
                   className="flex items-center space-x-1 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20 transition-all cursor-pointer"
@@ -243,7 +243,7 @@ export const WalletStudio: React.FC<WalletStudioProps> = ({
             </h3>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
               <span>{connectionMode === 'extension' ? 'Midnight Lace Browser Extension (Zero-Seed)' : 'Midnight Multi-Role HD Wallet'}</span>
-              {!walletStatus?.isSynced && walletStatus?.syncProgress?.unshielded && (
+              {!walletStatus?.isSynced && (walletStatus?.syncProgress?.percentage ?? 0) < 100 && walletStatus?.syncProgress?.unshielded && (
                 <span className="text-[11px] text-slate-500 font-mono">
                   [Unshielded: {walletStatus.syncProgress.unshielded.percentage}% | Shielded: {walletStatus.syncProgress.shielded?.percentage ?? 0}% | DUST: {walletStatus.syncProgress.dust?.percentage ?? 0}%]
                 </span>

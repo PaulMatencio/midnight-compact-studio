@@ -46,8 +46,8 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenMobileNav }) => {
 
   const isProofOnline = systemHealth?.proofServer.status === 'online';
   const isIndexerOnline = systemHealth?.indexer.status === 'online';
-  const isSynced = walletStatus?.isSynced ?? false;
   const syncPercentage = walletStatus?.syncProgress?.percentage ?? 0;
+  const isSynced = (walletStatus?.isSynced ?? false) || syncPercentage >= 100;
   const walletAddress = walletStatus?.unshieldedAddress;
 
   const currentRouteMeta = routeTitles[pathname] || {

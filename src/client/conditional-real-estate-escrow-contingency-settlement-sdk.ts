@@ -36,6 +36,7 @@ export enum EscrowStatus {
  * Strongly typed interface for the off-chain private state container.
  */
 export interface ConditionalRealEstateEscrowContingencySettlementPrivateState {
+  readonly callerSecret?: Uint8Array;
   readonly buyerSecret?: Uint8Array;
   readonly sellerSecret?: Uint8Array;
   readonly inspectorSecret?: Uint8Array;
@@ -62,20 +63,8 @@ export function createDefaultWitnesses<
   PS extends ConditionalRealEstateEscrowContingencySettlementPrivateState,
 >(): ConditionalRealEstateEscrowContingencySettlementWitnesses<PS> {
   return {
-    getBuyerSecret(context: WitnessContext<ContractLedger, PS>): [PS, Uint8Array] {
-      const secret = context.privateState.buyerSecret ?? new Uint8Array(32);
-      return [context.privateState, secret];
-    },
-    getSellerSecret(context: WitnessContext<ContractLedger, PS>): [PS, Uint8Array] {
-      const secret = context.privateState.sellerSecret ?? new Uint8Array(32);
-      return [context.privateState, secret];
-    },
-    getInspectorSecret(context: WitnessContext<ContractLedger, PS>): [PS, Uint8Array] {
-      const secret = context.privateState.inspectorSecret ?? new Uint8Array(32);
-      return [context.privateState, secret];
-    },
-    getTitleAgentSecret(context: WitnessContext<ContractLedger, PS>): [PS, Uint8Array] {
-      const secret = context.privateState.titleAgentSecret ?? new Uint8Array(32);
+    getCallerSecret(context: WitnessContext<ContractLedger, PS>): [PS, Uint8Array] {
+      const secret = context.privateState.callerSecret ?? context.privateState.buyerSecret ?? new Uint8Array(32);
       return [context.privateState, secret];
     },
   };
@@ -119,7 +108,8 @@ export class ConditionalRealEstateEscrowContingencySettlementClient<
     titleAgentPk: Uint8Array = new Uint8Array(32),
     propertyHash: Uint8Array = new Uint8Array(32),
     purchasePrice: bigint = 0n,
-    escrowDeposit: bigint = 0n
+    escrowDeposit: bigint = 0n,
+    salt: Uint8Array = new Uint8Array(32)
   ): ConstructorResult<PS> {
     return this.contract.initialState(
       context,
@@ -129,7 +119,8 @@ export class ConditionalRealEstateEscrowContingencySettlementClient<
       titleAgentPk,
       propertyHash,
       purchasePrice,
-      escrowDeposit
+      escrowDeposit,
+      salt
     );
   }
 
