@@ -46,4 +46,5 @@ tx-history.json
 private-state-store.json
 wallet-serialized-state.json
 .wallet-state/
+/bin/
 
