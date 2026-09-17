@@ -23,6 +23,11 @@ import {
     Check,
     SlidersHorizontal,
     Dices,
+    Wallet,
+    Unplug,
+    RotateCcw,
+    Loader2,
+    Sparkles,
 } from 'lucide-react';
 import { useWallet } from '@/src/presentation/context/WalletContext';
 import { useSystem } from '@/src/presentation/context/SystemContext';
@@ -37,6 +42,17 @@ import type { TxRecord } from '@/src/types/tx';
 
 type DeployStage = 'idle' | 'preparing' | 'proving' | 'balancing' | 'submitting' | 'indexing' | 'confirmed' | 'error';
 
+const DEPLOY_STORAGE_KEY = 'midnight_deploy_form_state';
+
+interface DeployFormPersistedState {
+    selectedBlueprintId?: string;
+    nickname?: string;
+    gasPayerMode?: 'studio' | 'lace';
+    constructorArgsByBlueprint?: Record<string, Record<string, string>>;
+    password?: string;
+    showPasswordOverride?: boolean;
+}
+
 export default function DeployPage() {
     const {
         seed,
@@ -45,7 +61,11 @@ export default function DeployPage() {
         extensionAddress,
         extensionShieldedCoinPublicKey,
         extensionShieldedEncryptionPublicKey,
+        extensionNetworkId,
         extensionApi,
+        connectionProgress,
+        connectExtension,
+        disconnectExtension,
         walletStatus,
         backendWalletStatus,
         fetchWalletStatus,
@@ -56,6 +76,10 @@ export default function DeployPage() {
     const { transactions, addTransaction, fetchTransactions } = useTransactions();
     const toast = useToast();
     const router = useRouter();
+
+    const [hasMounted, setHasMounted] = useState(false);
+    const [isConnectingExtension, setIsConnectingExtension] = useState(false);
+    const savedArgsRef = React.useRef<Record<string, Record<string, string>>>({});
 
     const [blueprints, setBlueprints] = useState<ContractBlueprint[]>(getAllContractBlueprints());
     const [selectedBlueprint, setSelectedBlueprint] = useState<ContractBlueprint>(blueprints[0] || {
@@ -81,15 +105,14 @@ export default function DeployPage() {
     const [receipt, setReceipt] = useState<any>(null);
     const [gasPayerMode, setGasPayerMode] = useState<'studio' | 'lace'>('studio');
 
-    // Initialize constructor arguments whenever selected blueprint changes
-    useEffect(() => {
-        if (!selectedBlueprint?.constructorParams || selectedBlueprint.constructorParams.length === 0) {
-            setConstructorArgs({});
-            return;
+    // Helper: Compute clean default constructor arguments for a blueprint
+    const getDefaultArgsForBlueprint = (bp: ContractBlueprint): Record<string, string> => {
+        if (!bp?.constructorParams || bp.constructorParams.length === 0) {
+            return {};
         }
 
         const initial: Record<string, string> = {};
-        for (const param of selectedBlueprint.constructorParams) {
+        for (const param of bp.constructorParams) {
             const clean = param.name.replace(/^_+/, '').toLowerCase();
             const isOwnerOrAuth = clean.includes('owner') || clean.includes('admin') || param.label?.toLowerCase().includes('owner');
 
@@ -115,8 +138,179 @@ export default function DeployPage() {
                 initial[param.name] = '';
             }
         }
-        setConstructorArgs(initial);
-    }, [selectedBlueprint, isExtensionConnected, extensionAddress, walletStatus?.unshieldedAddress]);
+        return initial;
+    };
+
+    // Handler: User switches contract blueprint - preserves arguments across blueprints
+    const handleSelectBlueprint = (bp: ContractBlueprint) => {
+        if (bp.id === selectedBlueprint.id) return;
+
+        // Cache current arguments before switching
+        savedArgsRef.current[selectedBlueprint.id] = constructorArgs;
+
+        setSelectedBlueprint(bp);
+
+        // Restore saved args if user previously entered values for this blueprint, else defaults
+        const savedForBp = savedArgsRef.current[bp.id];
+        if (savedForBp && Object.keys(savedForBp).length > 0) {
+            setConstructorArgs(savedForBp);
+        } else {
+            setConstructorArgs(getDefaultArgsForBlueprint(bp));
+        }
+    };
+
+    // Handler: Reset constructor arguments to clean blueprint defaults
+    const handleResetConstructorArgs = () => {
+        const defaults = getDefaultArgsForBlueprint(selectedBlueprint);
+        setConstructorArgs(defaults);
+        savedArgsRef.current[selectedBlueprint.id] = defaults;
+        toast.info('Arguments Reset', `Reset constructor arguments for ${selectedBlueprint.name} to defaults`);
+    };
+
+    // Handlers: Lace Wallet Connect / Disconnect
+    const handleConnectLace = async () => {
+        setIsConnectingExtension(true);
+        try {
+            const ok = await connectExtension();
+            if (ok) {
+                toast.success('Wallet Connected', 'Connected to Midnight Lace Extension');
+            }
+        } catch (err: any) {
+            console.error('Lace connection error:', err);
+            toast.error('Connection Failed', err?.message || 'Failed to connect to Midnight Lace extension');
+        } finally {
+            setIsConnectingExtension(false);
+        }
+    };
+
+    const handleDisconnectLace = () => {
+        disconnectExtension();
+        toast.info('Wallet Disconnected', 'Disconnected from Midnight Lace Extension');
+    };
+
+    // 1. Initial Mount: Load persisted form state from localStorage
+    useEffect(() => {
+        let savedState: DeployFormPersistedState | null = null;
+        try {
+            const raw = localStorage.getItem(DEPLOY_STORAGE_KEY);
+            if (raw) {
+                savedState = JSON.parse(raw);
+            }
+        } catch (e) {
+            console.warn('Failed to parse saved deploy form state:', e);
+        }
+
+        if (savedState) {
+            if (savedState.constructorArgsByBlueprint) {
+                savedArgsRef.current = savedState.constructorArgsByBlueprint;
+            }
+            if (savedState.nickname) {
+                setNickname(savedState.nickname);
+            }
+            if (savedState.gasPayerMode) {
+                setGasPayerMode(savedState.gasPayerMode);
+            }
+            if (savedState.password) {
+                setPassword(savedState.password);
+            }
+            if (savedState.showPasswordOverride !== undefined) {
+                setShowPasswordOverride(savedState.showPasswordOverride);
+            }
+        }
+
+        setHasMounted(true);
+    }, []);
+
+    // 2. Fetch deploy configuration and dynamically discovered contracts
+    useEffect(() => {
+        const fetchConfig = async () => {
+            try {
+                const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+                const requestedContract = urlParams?.get('contract') || urlParams?.get('template') || '';
+
+                let savedId = '';
+                try {
+                    const raw = localStorage.getItem(DEPLOY_STORAGE_KEY);
+                    if (raw) {
+                        const parsed = JSON.parse(raw);
+                        savedId = parsed.selectedBlueprintId || '';
+                    }
+                } catch {}
+
+                const res = await fetch('/api/contract/deploy');
+                const data = await res.json();
+                if (data.success && data.data) {
+                    setHasEnvPassword(Boolean(data.data.hasEnvPassword));
+                    const contracts: ContractBlueprint[] = data.data.availableContracts || [];
+                    if (contracts.length > 0) {
+                        setBlueprints(contracts);
+
+                        const targetContractId = requestedContract || savedId;
+                        let matchedBp: ContractBlueprint | undefined;
+                        if (targetContractId) {
+                            matchedBp = contracts.find(
+                                (c) => c.id.toLowerCase() === targetContractId.toLowerCase()
+                            );
+                        }
+                        const bpToSelect = matchedBp || contracts[0];
+                        setSelectedBlueprint(bpToSelect);
+
+                        // If we have saved constructor args for this blueprint, apply them
+                        const savedArgs = savedArgsRef.current[bpToSelect.id];
+                        if (savedArgs && Object.keys(savedArgs).length > 0) {
+                            setConstructorArgs(savedArgs);
+                        } else {
+                            setConstructorArgs(getDefaultArgsForBlueprint(bpToSelect));
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn('Failed to load deploy config:', err);
+            }
+        };
+        fetchConfig();
+    }, []);
+
+    // 3. Persist deploy form state to localStorage on user modifications
+    useEffect(() => {
+        if (!hasMounted) return;
+        try {
+            const stateToSave: DeployFormPersistedState = {
+                selectedBlueprintId: selectedBlueprint.id,
+                nickname,
+                gasPayerMode,
+                constructorArgsByBlueprint: {
+                    ...savedArgsRef.current,
+                    [selectedBlueprint.id]: constructorArgs,
+                },
+                password,
+                showPasswordOverride,
+            };
+            savedArgsRef.current = stateToSave.constructorArgsByBlueprint!;
+            localStorage.setItem(DEPLOY_STORAGE_KEY, JSON.stringify(stateToSave));
+        } catch (err) {
+            console.warn('Failed to persist deploy form state:', err);
+        }
+    }, [hasMounted, selectedBlueprint.id, nickname, gasPayerMode, constructorArgs, password, showPasswordOverride]);
+
+    // 4. When Lace connects, auto-fill owner fields if they are currently 'deployer' or empty
+    useEffect(() => {
+        if (isExtensionConnected && extensionAddress) {
+            setConstructorArgs((prev) => {
+                let changed = false;
+                const next = { ...prev };
+                for (const param of selectedBlueprint.constructorParams || []) {
+                    const clean = param.name.replace(/^_+/, '').toLowerCase();
+                    const isOwnerOrAuth = clean.includes('owner') || clean.includes('admin') || param.label?.toLowerCase().includes('owner');
+                    if (isOwnerOrAuth && (!next[param.name] || next[param.name] === 'deployer')) {
+                        next[param.name] = extensionAddress;
+                        changed = true;
+                    }
+                }
+                return changed ? next : prev;
+            });
+        }
+    }, [isExtensionConnected, extensionAddress, selectedBlueprint]);
 
     const isExtensionMode = connectionMode === 'extension' && isExtensionConnected && Boolean(extensionApi);
     const syncPercentage = walletStatus?.syncProgress?.percentage ?? 0;
@@ -130,41 +324,6 @@ export default function DeployPage() {
     const isGasReady = isExtensionMode
         ? (gasPayerMode === 'studio' ? isBackendReady : (isExtensionConnected && Boolean(extensionAddress)))
         : isBackendReady;
-
-    // Fetch deploy configuration and dynamically discovered contracts
-    useEffect(() => {
-        const fetchConfig = async () => {
-            try {
-                const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-                const requestedContract = urlParams?.get('contract') || urlParams?.get('template') || '';
-
-                const res = await fetch('/api/contract/deploy');
-                const data = await res.json();
-                if (data.success && data.data) {
-                    setHasEnvPassword(Boolean(data.data.hasEnvPassword));
-                    const contracts: ContractBlueprint[] = data.data.availableContracts || [];
-                    if (contracts.length > 0) {
-                        setBlueprints(contracts);
-
-                        // If user arrived from IDE with ?contract=name, auto-select it
-                        if (requestedContract) {
-                            const match = contracts.find(
-                                (c) => c.id.toLowerCase() === requestedContract.toLowerCase()
-                            );
-                            if (match) {
-                                setSelectedBlueprint(match);
-                                return;
-                            }
-                        }
-                        setSelectedBlueprint(contracts[0]);
-                    }
-                }
-            } catch (err) {
-                console.warn('Failed to load deploy config:', err);
-            }
-        };
-        fetchConfig();
-    }, []);
 
     const isPasswordValid = hasEnvPassword && !showPasswordOverride
         ? true
@@ -582,6 +741,98 @@ export default function DeployPage() {
                     </div>
 
                     <form onSubmit={handleDeploy} className="space-y-5">
+                        {/* Lace Wallet Connection Card */}
+                        {isExtensionConnected && extensionAddress ? (
+                            <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-4 space-y-2.5">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center space-x-2.5 min-w-0">
+                                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                            <Wallet className="h-4 w-4" />
+                                        </div>
+                                        <div className="min-w-0">
+                                            <div className="flex items-center space-x-2">
+                                                <span className="text-xs font-bold text-white">Midnight Lace Wallet</span>
+                                                <span className="flex items-center space-x-1 rounded-full bg-emerald-500/20 px-2 py-0.2 text-[10px] font-semibold text-emerald-300 border border-emerald-500/30">
+                                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399]" />
+                                                    <span>Connected</span>
+                                                </span>
+                                                <span className="text-[10px] font-mono text-cyan-300 uppercase px-1.5 py-0.2 rounded bg-cyan-500/10 border border-cyan-500/20">
+                                                    {extensionNetworkId || 'preprod'}
+                                                </span>
+                                            </div>
+                                            <div className="text-[11px] font-mono text-slate-300 mt-0.5 truncate" title={extensionAddress}>
+                                                {extensionAddress}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center space-x-2 shrink-0 ml-2">
+                                        <button
+                                            type="button"
+                                            onClick={handleDisconnectLace}
+                                            className="px-2.5 py-1 rounded-lg bg-midnight-900/80 hover:bg-rose-500/10 border border-white/10 hover:border-rose-500/30 text-slate-400 hover:text-rose-300 text-[11px] font-medium transition-all flex items-center space-x-1 cursor-pointer"
+                                            title="Disconnect Lace Wallet"
+                                        >
+                                            <Unplug className="h-3 w-3" />
+                                            <span>Disconnect</span>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="flex items-center justify-between pt-1.5 border-t border-emerald-500/10 text-[10px] text-slate-400">
+                                    <span className="text-emerald-300/80 font-medium">Lace assigned as on-chain Owner & Deploy Signer</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            navigator.clipboard.writeText(extensionAddress);
+                                            toast.success('Address Copied', 'Lace unshielded address copied to clipboard');
+                                        }}
+                                        className="text-emerald-400 hover:underline flex items-center space-x-1 cursor-pointer"
+                                    >
+                                        <Copy className="h-3 w-3" />
+                                        <span>Copy Address</span>
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="rounded-xl border border-indigo-500/30 bg-gradient-to-r from-indigo-950/40 via-purple-950/20 to-midnight-950/60 p-4 space-y-3">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                    <div className="flex items-start space-x-3">
+                                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-500/20 text-cyan-400 border border-indigo-500/30">
+                                            <Wallet className="h-4.5 w-4.5" />
+                                        </div>
+                                        <div className="space-y-0.5">
+                                            <div className="flex items-center space-x-2">
+                                                <span className="text-xs font-bold text-white">Midnight Lace Wallet</span>
+                                                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-slate-400 border border-white/10">
+                                                    Disconnected
+                                                </span>
+                                            </div>
+                                            <p className="text-[11px] text-slate-300 leading-relaxed">
+                                                Connect your browser wallet to deploy contracts as on-chain Owner with zero seed exposure.
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={handleConnectLace}
+                                        disabled={isConnectingExtension}
+                                        className="shrink-0 px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-500 hover:from-indigo-500 hover:to-cyan-400 text-white font-bold text-xs shadow-lg shadow-indigo-500/25 transition-all flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-50"
+                                    >
+                                        {isConnectingExtension ? (
+                                            <>
+                                                <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
+                                                <span>{connectionProgress || 'Connecting Lace...'}</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Wallet className="h-3.5 w-3.5 text-cyan-300" />
+                                                <span>Connect Lace Wallet</span>
+                                            </>
+                                        )}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
                         {/* Contract Selector */}
                         <div className="space-y-2">
                             <label className="block text-xs font-medium text-slate-300">
@@ -591,7 +842,7 @@ export default function DeployPage() {
                                 {blueprints.map((bp) => (
                                     <div
                                         key={bp.id}
-                                        onClick={() => setSelectedBlueprint(bp)}
+                                        onClick={() => handleSelectBlueprint(bp)}
                                         className={`p-4 rounded-xl border transition-all cursor-pointer flex items-start space-x-3 ${
                                             selectedBlueprint.id === bp.id
                                                 ? 'bg-indigo-950/60 border-indigo-500/50 shadow-md'
@@ -687,12 +938,23 @@ export default function DeployPage() {
                         {/* Constructor Parameters (if required by contract) */}
                         {selectedBlueprint.constructorParams && selectedBlueprint.constructorParams.length > 0 && (
                             <div className="space-y-3 rounded-xl bg-midnight-950/80 p-4 border border-cyan-500/20">
-                                <div className="flex items-center space-x-2 pb-1 border-b border-white/5">
-                                    <SlidersHorizontal className="h-4 w-4 text-cyan-400" />
-                                    <span className="text-xs font-semibold text-slate-200">Contract Constructor Arguments</span>
-                                    <span className="text-[10px] font-semibold text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-full border border-cyan-500/20">
-                                        {selectedBlueprint.constructorParams.length} {selectedBlueprint.constructorParams.length === 1 ? 'argument' : 'arguments'}
-                                    </span>
+                                <div className="flex items-center justify-between pb-1 border-b border-white/5">
+                                    <div className="flex items-center space-x-2">
+                                        <SlidersHorizontal className="h-4 w-4 text-cyan-400" />
+                                        <span className="text-xs font-semibold text-slate-200">Contract Constructor Arguments</span>
+                                        <span className="text-[10px] font-semibold text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-full border border-cyan-500/20">
+                                            {selectedBlueprint.constructorParams.length} {selectedBlueprint.constructorParams.length === 1 ? 'argument' : 'arguments'}
+                                        </span>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={handleResetConstructorArgs}
+                                        title="Reset parameters to blueprint defaults"
+                                        className="text-[10px] text-slate-400 hover:text-cyan-300 flex items-center space-x-1 cursor-pointer transition-colors"
+                                    >
+                                        <RotateCcw className="h-3 w-3" />
+                                        <span>Reset Defaults</span>
+                                    </button>
                                 </div>
                                 <p className="text-[11px] text-slate-400 leading-relaxed">
                                     This contract requires initialization parameters for its on-chain ledger state.
@@ -1007,6 +1269,32 @@ export default function DeployPage() {
                                 </div>
                             ) : (
                                 <>
+                                    {/* Lace Connection Trigger inside Gas Section */}
+                                    <div
+                                        onClick={handleConnectLace}
+                                        className="p-3 rounded-lg border border-dashed border-indigo-500/40 hover:border-cyan-400/60 bg-indigo-950/20 hover:bg-indigo-950/40 transition-all cursor-pointer flex items-center justify-between group"
+                                    >
+                                        <div className="flex items-center space-x-2.5 min-w-0">
+                                            <div className="h-8 w-8 rounded-lg bg-indigo-500/20 flex items-center justify-center text-cyan-400 group-hover:scale-105 transition-transform shrink-0">
+                                                <Wallet className="h-4 w-4" />
+                                            </div>
+                                            <div className="min-w-0">
+                                                <div className="text-xs font-semibold text-white group-hover:text-cyan-300 transition-colors flex items-center space-x-1.5">
+                                                    <span>Connect Midnight Lace Wallet</span>
+                                                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-semibold">Recommended</span>
+                                                </div>
+                                                <p className="text-[10px] text-slate-400">Deploy as on-chain Owner with Lace Direct Gas (Option A) or Studio Gas (Option B)</p>
+                                            </div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            disabled={isConnectingExtension}
+                                            className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-indigo-600 to-cyan-500 hover:from-indigo-500 hover:to-cyan-400 text-white text-[11px] font-bold shadow transition-all shrink-0 cursor-pointer disabled:opacity-50 ml-2"
+                                        >
+                                            {isConnectingExtension ? 'Connecting...' : 'Connect Lace'}
+                                        </button>
+                                    </div>
+
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                                         <div className="p-3 rounded-lg bg-midnight-900 border border-white/5 space-y-1">
                                             <span className="text-[10px] uppercase font-bold text-slate-400">Contract Owner (Admin)</span>
@@ -1049,11 +1337,20 @@ export default function DeployPage() {
                                                         Studio Backend Deployer Requires Gas (DUST)
                                                     </p>
                                                     <p className="text-slate-300">
-                                                        You are in Headless Seed Mode. To deploy with your connected Lace wallet instead, select <strong>Lace Extension</strong> in the header or Wallet Studio. Otherwise, send <strong>5–10 tNIGHT</strong> to the Studio deployer address above and click <strong>Register for DUST</strong> below.
+                                                        You are currently in Headless Seed Mode. To deploy with your connected Lace wallet instead, connect Midnight Lace above. Otherwise, send <strong>5–10 tNIGHT</strong> to the Studio deployer address above and click <strong>Register for DUST</strong> below.
                                                     </p>
                                                 </div>
                                             </div>
-                                            <div className="flex items-center space-x-2 pt-1">
+                                            <div className="flex items-center flex-wrap gap-2 pt-1">
+                                                <button
+                                                    type="button"
+                                                    onClick={handleConnectLace}
+                                                    disabled={isConnectingExtension}
+                                                    className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-indigo-600 to-cyan-500 hover:from-indigo-500 hover:to-cyan-400 text-white font-bold text-xs shadow transition-colors disabled:opacity-50 flex items-center space-x-1.5 cursor-pointer"
+                                                >
+                                                    {isConnectingExtension ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wallet className="h-3.5 w-3.5" />}
+                                                    <span>Connect Lace Wallet</span>
+                                                </button>
                                                 <button
                                                     type="button"
                                                     onClick={async () => {
