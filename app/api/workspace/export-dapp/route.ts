@@ -109,6 +109,381 @@ async function resolveCurrentDeployment(baseContractName: string, requestedAddre
 }
 
 /**
+ * Load contract-info.json metadata from managed compiler directories.
+ */
+async function loadContractInfo(baseContractName: string): Promise<any | null> {
+    const rootDir = process.cwd();
+    const candidatePaths = [
+        path.join(rootDir, 'contracts', 'managed', baseContractName, 'compiler', 'contract-info.json'),
+        path.join(rootDir, 'contracts', 'managed', baseContractName, 'contract', 'compiler', 'contract-info.json'),
+        path.join(rootDir, 'contracts', 'managed', baseContractName, 'contract-info.json'),
+    ];
+
+    for (const p of candidatePaths) {
+        try {
+            const data = await fs.readFile(p, 'utf-8');
+            return JSON.parse(data);
+        } catch {}
+    }
+    return null;
+}
+
+/**
+ * Format Compact JSON AST types into clean Compact syntax strings.
+ */
+function formatCompactType(typeObj: any): string {
+    if (!typeObj) return 'void';
+    if (typeof typeObj === 'string') return typeObj;
+    switch (typeObj['type-name']) {
+        case 'Bytes':
+            return `Bytes<${typeObj.length ?? 32}>`;
+        case 'Uint': {
+            if (typeObj.maxval) {
+                const max = String(typeObj.maxval);
+                if (max === '255') return 'Uint<8>';
+                if (max === '65535') return 'Uint<16>';
+                if (max === '4294967295') return 'Uint<32>';
+                if (max === '18446744073709551615') return 'Uint<64>';
+                if (max === '340282366920938463463374607431768211455') return 'Uint<128>';
+                if (max === '452312848583266388373324160190187140051835877600158453279131187530910662655') return 'Uint<248>';
+            }
+            return 'Uint';
+        }
+        case 'Boolean':
+            return 'Boolean';
+        case 'Field':
+            return 'Field';
+        case 'Opaque':
+            return typeObj.tsType ? `Opaque<"${typeObj.tsType}">` : 'Opaque';
+        case 'Alias':
+            return typeObj.name || formatCompactType(typeObj.type);
+        case 'Vector':
+            return `Vector<${typeObj.length}, ${formatCompactType(typeObj.type)}>`;
+        case 'Struct':
+            return typeObj.name || 'Struct';
+        case 'Tuple':
+            return `[${(typeObj.types || []).map(formatCompactType).join(', ')}]`;
+        case 'Cell':
+            return `Cell<${formatCompactType(typeObj.type)}>`;
+        case 'Map':
+            return `Map<${formatCompactType(typeObj.key)}, ${formatCompactType(typeObj.value)}>`;
+        case 'Set':
+            return `Set<${formatCompactType(typeObj.type)}>`;
+        case 'Counter':
+            return 'Counter';
+        default:
+            return typeObj['type-name'] || JSON.stringify(typeObj);
+    }
+}
+
+/**
+ * Generate WHAT_NEWS.md instructing Gemini on all new and updated circuits,
+ * ledger schemas, pruned view circuits, and Clean Architecture frontend updates.
+ */
+function generateWhatsNews(
+    baseContractName: string,
+    config: DeploymentConfig,
+    contractInfo: any | null
+): string {
+    const pascalName = baseContractName
+        .split('-')
+        .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+        .join('');
+
+    const circuits: any[] = contractInfo?.circuits || [];
+    const ledger: any[] = contractInfo?.ledger || [];
+    const witnesses: any[] = contractInfo?.witnesses || [];
+    const compilerVersion = contractInfo?.['compiler-version'] || '0.31.1';
+    const languageVersion = contractInfo?.['language-version'] || '0.23.0';
+
+    // Capabilities detection
+    const hasMultisig = circuits.some((c) =>
+        c.arguments?.some((a: any) => a.name === 'pubkeys' || a.name === 'signatures')
+    );
+    const hasSelfBurn = circuits.some((c) => c.name === 'selfBurn');
+    const hasPause = circuits.some((c) => c.name === 'pause');
+    const hasUnpause = circuits.some((c) => c.name === 'unpause');
+    const hasEmergencyPauser = circuits.some((c) => c.name === 'setEmergencyPauser');
+    const hasAdminReallocate = circuits.some((c) => c.name === 'adminReallocate');
+    const hasEmergencyWithdraw = circuits.some((c) => c.name === 'emergencyWithdraw');
+    const hasReplaySalt = ledger.some((l) => l.name === '_contractSalt' || l.name === 'contractSalt');
+
+    // Build circuit rows
+    const circuitTableRows = circuits.length > 0
+        ? circuits.map((c) => {
+            const argsStr = (c.arguments || [])
+                .map((a: any) => `\`${a.name}: ${formatCompactType(a.type)}\``)
+                .join(', ') || '*none*';
+            const retStr = `\`${formatCompactType(c['result-type'])}\``;
+            const proofBadge = c.proof
+                ? '🔒 **Proof Required**'
+                : (c.pure ? '⚡ Pure / Local' : 'ℹ️ No Proof');
+            return `| \`${c.name}\` | ${proofBadge} | ${argsStr} | ${retStr} |`;
+        }).join('\n')
+        : '| *No circuit metadata found* | - | - | - |';
+
+    // Build ledger rows
+    const ledgerTableRows = ledger.length > 0
+        ? ledger.map((l) => {
+            let typeStr = '';
+            if (l.storage === 'Map') {
+                typeStr = `Map<${formatCompactType(l.key)}, ${formatCompactType(l.value)}>`;
+            } else if (l.storage === 'Set') {
+                typeStr = `Set<${formatCompactType(l.type)}>`;
+            } else if (l.storage === 'Cell') {
+                typeStr = `Cell<${formatCompactType(l.type)}>`;
+            } else if (l.storage === 'Counter') {
+                typeStr = 'Counter';
+            } else {
+                typeStr = formatCompactType(l.type || l);
+            }
+            return `| \`${l.name}\` | \`${l.storage}\` | \`${typeStr}\` | ${l.index !== undefined ? l.index : '-'} |`;
+        }).join('\n')
+        : '| *No ledger metadata found* | - | - | - |';
+
+    return `# WHAT'S NEW: Smart Contract Updates & Frontend Migration Guide
+
+> **Target Contract**: \`${pascalName}\` (\`${baseContractName}\`)  
+> **Compiler Version**: \`compactc ${compilerVersion}\` | **Language Version**: \`>= ${languageVersion}\`  
+> **Deployed Address**: \`${config.contractAddress || DEFAULT_DEPLOYMENT_CONFIG.contractAddress}\`  
+> **Network ID**: \`${config.networkId || DEFAULT_DEPLOYMENT_CONFIG.networkId}\`
+
+---
+
+## 📢 Executive Summary for Gemini
+
+This document provides a comprehensive specification of all **new and updated circuits**, **ledger state changes**, **witness requirements**, and **frontend architecture updates** for the **\`${baseContractName}\`** smart contract.
+
+Gemini **MUST** review this file to update the frontend DApp code (Clean Architecture: Domain, Application, Infrastructure, Presentation) to reflect these exact contract capabilities.
+
+${hasMultisig ? `### 🔑 Key Evolution: Privacy-Preserving Multi-Sig Governance
+The contract introduces **OpenZeppelin-style threshold multi-sig governance** on the **Jubjub elliptic curve**:
+- Sensitive operations (\`mint\`, \`burn\`, \`setEmergencyPauser\`) require threshold Schnorr signatures.
+- Signatures are verified **inside zero-knowledge circuits** using Jubjub points and Schnorr reduction witnesses.
+- Private keys never leave signers' local machines, preserving complete transaction privacy.
+` : ''}
+${hasSelfBurn ? `### 🔥 User Deflationary Self-Burn
+- The \`selfBurn\` circuit enables any token holder to permanently burn a portion of their own balance without requiring owner or multi-sig approval.
+` : ''}
+${hasPause ? `### ⏸️ Emergency Pause & Circuit Breaker
+- The \`pause\` and \`unpause\` circuits allow the authorized emergency pauser or owner to freeze token movements during critical security events.
+` : ''}
+${hasReplaySalt ? `### 🛡️ Cross-Contract Replay Protection (\`_contractSalt\`)
+- All authentications and domain hashes incorporate \`_contractSalt\`. The deployer's single wallet secret key satisfies both caller and owner authentication.
+` : ''}
+
+---
+
+## ⚡ Complete Circuits Reference & Signatures
+
+The table below lists all compiled circuits in \`${baseContractName}\`. Note which circuits require ZK proof generation and which are pure helpers:
+
+| Circuit Name | Execution Type | Arguments | Return Type |
+| :--- | :--- | :--- | :--- |
+${circuitTableRows}
+
+---
+
+## 🔍 Detailed Breakdown of New & Updated Circuits
+
+${hasMultisig ? `### 1. Multi-Sig Governance Circuits (\`mint\`, \`burn\`, \`setEmergencyPauser\`)
+
+#### Signatures:
+\`\`\`typescript
+mint(to: Uint8Array, value: bigint, pubkeys: JubjubPoint[], signatures: SchnorrSignature[]): Promise<boolean>
+burn(account: Uint8Array, value: bigint, pubkeys: JubjubPoint[], signatures: SchnorrSignature[]): Promise<boolean>
+setEmergencyPauser(newPauser: Uint8Array, pubkeys: JubjubPoint[], signatures: SchnorrSignature[]): Promise<boolean>
+\`\`\`
+
+#### Required Data Shapes:
+- **\`pubkeys\`**: Array of 2 \`JubjubPoint\` objects representing the threshold signers' public keys on the Jubjub curve.
+- **\`signatures\`**: Array of 2 \`SchnorrSignature\` objects:
+  \`\`\`typescript
+  interface SchnorrSignature {
+      announcement: JubjubPoint;
+      response: bigint;
+  }
+  \`\`\`
+- **Threshold**: Exactly \`_multisigThreshold\` (default: 2) valid signatures matching registered signer commitments in \`_multisigSigners\` must be provided.
+- **Nonce Replay Prevention**: Each multi-sig transaction increments \`_multisigNonce\` on the ledger. Proposals must be signed over the current \`_multisigNonce\`.
+
+#### Frontend Guidance for Gemini:
+1. **Domain Port**: Define multi-sig methods in \`src/domain/ports/i-contract.gateway.ts\`.
+2. **Use Case**: Implement \`mint-tokens.usecase.ts\` and \`burn-tokens.usecase.ts\` that accept signature arrays or provide a multi-sig proposal collection workflow.
+3. **Infrastructure Adapter**: In \`src/infrastructure/adapters/contract.adapter.ts\`, serialize Jubjub points and Schnorr signatures into the format expected by \`contract.circuits.mint(...)\`.
+4. **UI**: Add a **Multi-Sig Execution Stepper** or modal where signers can paste or assemble their Jubjub signatures.
+` : ''}
+
+${hasSelfBurn ? `### 2. Self-Burn Circuit (\`selfBurn\`)
+
+#### Signature:
+\`\`\`typescript
+selfBurn(caller: Uint8Array, value: bigint): Promise<boolean>
+\`\`\`
+
+#### Purpose & Behavior:
+- Allows any token holder to burn tokens directly from their own address.
+- Verifies \`authenticate(caller)\` using the caller's \`localSecretKey()\` witness.
+- Decrements the caller's balance in \`_balances\` and reduces \`_totalSupply\`.
+- Enforces \`whenNotPaused()\`.
+
+#### Frontend Guidance for Gemini:
+1. Add \`selfBurn(value: bigint): Promise<string>\` to \`IContractGateway\`.
+2. Implement \`self-burn.usecase.ts\`.
+3. Add a dedicated **"Self Burn"** card in the Dashboard quick-actions grid with an input for the amount and a warning modal.
+` : ''}
+
+${hasPause ? `### 3. Emergency Pause Controls (\`pause\`, \`unpause\`, \`setEmergencyPauser\`)
+
+#### Signatures:
+\`\`\`typescript
+pause(caller: Uint8Array): Promise<boolean>
+unpause(caller: Uint8Array): Promise<boolean>
+setEmergencyPauser(newPauser: Uint8Array, pubkeys: JubjubPoint[], signatures: SchnorrSignature[]): Promise<boolean>
+\`\`\`
+
+#### Purpose & Behavior:
+- \`pause\`: Callable by the contract \`owner\` OR the \`_emergencyPauser\`. Sets \`_paused = true\`.
+- \`unpause\`: Callable by \`owner\` or \`_emergencyPauser\`. Restores normal operation (\`_paused = false\`).
+- When paused, \`transfer\`, \`transferFrom\`, \`mint\`, \`burn\`, and \`selfBurn\` are blocked by \`whenNotPaused()\`.
+
+#### Frontend Guidance for Gemini:
+1. Subscribe to \`_paused\` from the public ledger state in \`useContractState.ts\`.
+2. Display a prominent **"CONTRACT PAUSED"** amber/red banner at the top of the DApp when \`_paused === true\`.
+3. Disable transfer, mint, and burn submission buttons when paused, with a tooltip explaining that the contract is currently paused.
+4. Add Pause/Unpause toggle controls in the Admin / Side Panel section visible only when connected with an authorized account.
+` : ''}
+
+${hasAdminReallocate ? `### 4. Admin Fund Recovery (\`adminReallocate\`)
+
+#### Signature:
+\`\`\`typescript
+adminReallocate(caller: Uint8Array, trappedAccount: Uint8Array, targetSpendableAccount: Uint8Array, amount: bigint): Promise<boolean>
+\`\`\`
+
+#### Purpose & Behavior:
+- Allows the contract owner to recover trapped or misplaced tokens from an unspendable account to a valid target account.
+- Protected by \`authenticate(owner)\`.
+` : ''}
+
+---
+
+## ⚠️ CRITICAL: Pruned View Circuits & Direct Public Ledger Queries
+
+> [!IMPORTANT]
+> **DO NOT generate circuit-call transactions for read-only / view operations!**  
+> In Compact smart contracts, read-only view helper circuits (such as \`balanceOf\`, \`allowance\`, \`isPaused\`, \`getMultisigNonce\`, \`getMultisigThreshold\`, \`getMultisigSignerCount\`, \`isMultisigSigner\`) were **pruned from the on-chain circuit table** to prevent block gas limit exhaustion.
+
+### How Gemini MUST Implement Queries:
+Instead of submitting on-chain transactions, query the public ledger state directly using **\`@midnight-ntwrk/compact-runtime\`** \`contract.ledger(publicDataProvider)\` or the Indexer GraphQL API:
+
+\`\`\`typescript
+// Example: Reading public ledger state in contract.adapter.ts
+async function getContractState(contractAddress: string): Promise<ContractStateModel> {
+    const publicDataProvider = providers.publicDataProvider;
+    const ledgerState = await contract.ledger(publicDataProvider);
+
+    return {
+        name: ledgerState._name,
+        symbol: ledgerState._symbol,
+        decimals: Number(ledgerState._decimals),
+        totalSupply: ledgerState._totalSupply,
+        maxSupply: ledgerState._maxSupply,
+        isPaused: Boolean(ledgerState._paused),
+        multisigThreshold: Number(ledgerState._multisigThreshold ?? 0),
+        multisigSignerCount: Number(ledgerState._multisigSignerCount ?? 0),
+        multisigNonce: BigInt(ledgerState._multisigNonce ?? 0n),
+        owner: ledgerState.owner,
+        emergencyPauser: ledgerState._emergencyPauser,
+    };
+}
+
+// Example: Querying user balance from the _balances Map
+async function getUserBalance(userAddressHex: string): Promise<bigint> {
+    const ledgerState = await contract.ledger(providers.publicDataProvider);
+    const addressBytes = fromHex(userAddressHex);
+    return ledgerState._balances.get(addressBytes) ?? 0n;
+}
+\`\`\`
+
+---
+
+## 📊 Public Ledger Schema & Storage Layout
+
+The table below outlines all state variables exported on the ledger:
+
+| State Variable | Storage Type | Data Type | Index |
+| :--- | :--- | :--- | :--- |
+${ledgerTableRows}
+
+---
+
+## 🏗️ Step-by-Step Frontend Migration Plan for Gemini
+
+Follow these exact steps across the Clean Architecture layers:
+
+### Layer 1: Domain Layer (\`src/domain/\`)
+1. **Ports** (\`src/domain/ports/i-contract.gateway.ts\`):
+   - Update \`IContractGateway\` to include all new circuit operations:
+     \`\`\`typescript
+     export interface IContractGateway {
+         getContractState(): Promise<ContractStateModel>;
+         getBalance(account: string): Promise<bigint>;
+         getAllowance(owner: string, spender: string): Promise<bigint>;
+         transfer(to: string, amount: bigint): Promise<string>;
+         approve(spender: string, amount: bigint): Promise<string>;
+         transferFrom(from: string, to: string, amount: bigint): Promise<string>;
+         ${hasSelfBurn ? 'selfBurn(amount: bigint): Promise<string>;' : ''}
+         ${hasPause ? 'pause(): Promise<string>;\n         unpause(): Promise<string>;' : ''}
+         ${hasMultisig ? `mint(to: string, amount: bigint, pubkeys: JubjubPoint[], signatures: SchnorrSignature[]): Promise<string>;
+         burn(account: string, amount: bigint, pubkeys: JubjubPoint[], signatures: SchnorrSignature[]): Promise<string>;
+         setEmergencyPauser(newPauser: string, pubkeys: JubjubPoint[], signatures: SchnorrSignature[]): Promise<string>;` : ''}
+     }
+     \`\`\`
+2. **Models** (\`src/domain/models/contract-state.model.ts\`):
+   - Add fields for \`isPaused\`, \`emergencyPauser\`, \`multisigThreshold\`, \`multisigSignerCount\`, and \`multisigNonce\`.
+
+### Layer 2: Application Layer (\`src/application/use-cases/\`)
+Create or update dedicated use cases:
+- \`transfer-tokens.usecase.ts\`: Validates balance, ensures \`!isPaused\`, and calls \`gateway.transfer\`.
+${hasSelfBurn ? '- `self-burn.usecase.ts`: Validates caller balance, ensures `!isPaused`, and calls `gateway.selfBurn`.' : ''}
+${hasPause ? '- `toggle-pause.usecase.ts`: Executes pause or unpause based on current contract state.' : ''}
+${hasMultisig ? `- \`mint-tokens.usecase.ts\`: Validates 2-of-2 Schnorr signatures, checks nonces, and calls \`gateway.mint\`.
+- \`burn-tokens.usecase.ts\`: Coordinates multi-sig burn proposals.` : ''}
+
+### Layer 3: Infrastructure Layer (\`src/infrastructure/\`)
+1. **Contract Adapter** (\`src/infrastructure/adapters/contract.adapter.ts\`):
+   - Implement the updated gateway methods.
+   - Use the client SDK (\`src/client/${baseContractName}-sdk.ts\`) or direct \`contract.circuits[name]\`.
+   - Wire Lace wallet transaction balancing:
+     \`\`\`typescript
+     const tx = await contract.circuits.transfer(ctx, callerBytes, toBytes, amount);
+     const balancedTxHex = await connectedApi.balanceUnsealedTransaction(tx.serialize(), { payFees: true });
+     await connectedApi.submitTransaction(balancedTxHex);
+     \`\`\`
+2. **Witness Handlers**:
+   - Provide \`localSecretKey()\` witness returning the connected wallet's derived secret key.
+   ${hasMultisig ? '- Provide `getSchnorrReduction(challengeHash)` witness returning `[q, cTruncated]` quotient and remainder for dividing challenge hash by `2^248`.' : ''}
+
+### Layer 4: Presentation Layer (\`src/presentation/\`)
+1. **Side Panel Navigation**:
+   - Add navigation links for **"Multi-Sig Governance"**, **"Deflation & Burn"**, and **"Emergency Controls"**.
+2. **Dashboard**:
+   - Add **Pause Status Banner**: Alerts users when contract operations are paused.
+   - Add **Multi-Sig Governance Metric Card**: Shows threshold (e.g. \`2 / 2\`), signer count, and current nonce.
+   - Add Quick Actions:
+     ${hasSelfBurn ? '- **"Burn My Tokens"** button triggering `selfBurn`.\n' : ''}
+     ${hasMultisig ? '- **"Multi-Sig Mint"** button opening signature collection modal.\n' : ''}
+     ${hasPause ? '- **"Emergency Pause"** / **"Resume Contract"** button for authorized signers.\n' : ''}
+3. **Transaction Steppers**:
+   - Display real-time steps: Proving (ZK Prover) -> Balancing (Lace DUST) -> Submitting (Node RPC) -> Block Confirmation.
+
+---
+*Generated by Midnight Compact Studio for ${pascalName} (${baseContractName}).*
+`;
+}
+
+/**
  * Generate a comprehensive, self-contained master prompt for Gemini or Claude
  * to scaffold the complete React/Next.js frontend application.
  */
@@ -134,13 +509,47 @@ A Midnight Compact smart contract called **\`${baseContractName}\`** has been co
 
 ---
 
+## 🧠 MANDATORY: Use Midnight DApp Skills in \`.agents/plugins/midnight-dapp-dev\`
+
+Before writing code or scaffolding this DApp, you **MUST** consult, load, and strictly adhere to the official Midnight DApp development skills located in **\`.agents/plugins/midnight-dapp-dev\`**:
+
+1. **\`midnight-dapp-dev:core\`** (\`.agents/plugins/midnight-dapp-dev/skills/core/SKILL.md\`):
+   - **Authoritative Architecture**: Authoritative reference for building browser-based DApps on the Midnight blockchain using Vite + React 19 + shadcn + Tailwind v4.
+   - **6-Provider Assembly Pattern**: Assembles \`WalletProvider\` (React context), \`MidnightProvidersProvider\`, \`PublicDataProvider\` (\`indexerPublicDataProvider\`), \`ZKConfigProvider\` (\`FetchZkConfigProvider\`), \`ProofProvider\` (\`httpClientProofProvider\`), and \`PrivateStateProvider\` (in-memory Map or browser storage).
+   - **Dynamic Network Configuration**: Dynamically derives network endpoints from \`ConnectedAPI.getConfiguration()\` (\`indexerUri\`, \`indexerWsUri\`, \`substrateNodeUri\`, \`networkId\`) — **never hardcode URLs in production**.
+   - **Vite Polyfills & Plugins**: Follows \`references/vite-config.md\` (\`@vitejs/plugin-react\`, \`@tailwindcss/vite\`, \`vite-plugin-wasm\`, \`vite-plugin-top-level-await\`, \`vite-plugin-node-polyfills\`).
+   - **Reactive State Management**: Follows \`references/state-management.md\` using RxJS \`combineLatest\` to fuse on-chain public state with off-chain private state into reactive React hooks (\`useContractState\`).
+   - **Testing Patterns**: Follows \`references/testing-patterns.md\` for Vitest + Testing Library tests with wallet mocking.
+
+2. **\`midnight-dapp-dev:dapp-connector\`** (\`.agents/plugins/midnight-dapp-dev/skills/dapp-connector/SKILL.md\`):
+   - **Connection Lifecycle**: Full connection lifecycle from \`window.midnight\` discovery to \`InitialAPI.connect(networkId)\` returning \`ConnectedAPI\`.
+   - **Multi-Wallet Discovery**: Discovers wallets dynamically via CAIP-372 enumeration on \`window.midnight\` with Lace alias fallback (\`window.midnight.mnLace\`).
+   - **Balancing & Submission**: Uses \`ConnectedAPI.balanceUnsealedTransaction(txHex, { payFees: true })\` for Lace gas fee balancing, and \`ConnectedAPI.submitTransaction(balancedTxHex)\` for broadcasting.
+   - **DApp Connector Spec Compliance**: Note that \`submitTransaction(tx: string): Promise<void>\` returns \`void\` (\`undefined\`). The transaction hash MUST be extracted from the deserialized transaction bytes (\`txObj.identifiers()[0]\`) or observed via the Indexer public data provider.
+   - **Error Handling**: Handles \`DAppConnectorAPIError\`, Effect-TS \`FiberFailure\` unwrapping, and insufficient DUST diagnostics.
+
+3. **\`midnight-dapp-dev:init\`** (\`.agents/plugins/midnight-dapp-dev/skills/init/SKILL.md\`):
+   - **Reference Scaffolding Templates**: Consults \`.agents/plugins/midnight-dapp-dev/skills/core/templates/\`:
+     - \`templates/ui/\`: Complete Vite + React 19 + Tailwind v4 + shadcn frontend template with wallet widget, proof server status, and contract hooks.
+     - \`templates/api/\`: TypeScript SDK adapter layer, private state manager, and contract types.
+
+4. **\`midnight-dapp-dev:midnight-sdk\`** (\`.agents/plugins/midnight-dapp-dev/skills/midnight-sdk/SKILL.md\`):
+   - Provides canonical reference for \`@midnight-ntwrk/*\` packages and ledger v8 interaction.
+
+> **Crucial Rule**: Do NOT invent synthetic abstractions or non-standard wallet connection methods. Use the patterns documented in \`.agents/plugins/midnight-dapp-dev\` as the single source of truth.
+
+---
+
 ## 📦 Bundled Project Artifacts Provided
 ${fileList.map((f) => `- \`${f}\``).join('\n')}
+- \`WHAT_NEWS.md\` (CRITICAL: Read this file for all new and updated circuits, parameter signatures, pruned view circuits, and frontend migration steps)
 
 ---
 
 ## 🎯 Primary Goal & Mandatory Requirements
 Scaffold and implement a complete, production-grade **React 19 / Next.js (App Router)** DApp client that interacts with the deployed **\`${pascalName}\`** smart contract on Midnight.
+
+> 💡 **Review WHAT_NEWS.md**: Consult the bundled \`WHAT_NEWS.md\` for a complete analysis of all newly introduced and updated circuits (e.g. multi-sig mint/burn, user self-burn, emergency pause/unpause), parameter signatures, ledger state fields, and explicit rules on querying pruned view circuits directly from public ledger state.
 
 You **MUST** adhere to these 3 mandatory requirements:
 1. **Build a Clean Architecture DApp**: Decouple domain logic, use cases, external infrastructure/Midnight SDK providers, and presentation layers.
@@ -173,12 +582,13 @@ You must organize the codebase strictly across Clean Architecture layers:
   - \`contract.adapter.ts\`: Implements \`IContractGateway\` utilizing the client SDK (\`src/client/${baseContractName}-sdk.ts\`) and Midnight providers.
   - \`activity.storage.ts\`: Implements \`IActivityStorage\` using browser LocalStorage or IndexedDB.
 - **Provider Assembly** (\`src/infrastructure/providers/midnight-providers.ts\`):
-  - Assembles the 5 essential Midnight providers into a unified \`MidnightProvider\`:
-    1. **WalletProvider**: Derived from the connected Lace wallet instance via the DApp Connector API.
+  - Assemble the 6 Midnight providers matching the \`midnight-dapp-dev:core\` specification:
+    1. **WalletProvider**: Derived from the connected Lace wallet instance via the DApp Connector API (\`window.midnight\`). Calls \`getConfiguration()\` to resolve service URIs.
     2. **PublicDataProvider**: Configured with \`@midnight-ntwrk/midnight-js-indexer-public-data-provider\` pointing to the Indexer GraphQL URL (\`${config.indexerUrl || DEFAULT_DEPLOYMENT_CONFIG.indexerUrl}\`).
     3. **ProofProvider**: Configured with \`@midnight-ntwrk/midnight-js-http-client-proof-provider\` pointing to the proof server (\`${config.proofServerUrl || DEFAULT_DEPLOYMENT_CONFIG.proofServerUrl}\`) or delegated proving via Lace.
-    4. **ZKConfigProvider**: Serves the compiled ZKIR circuit bytecodes from \`public/zkir/${baseContractName}/\`.
-    5. **PrivateStateProvider**: In-browser local private state manager for storing off-chain witness data.
+    4. **ZKConfigProvider**: Serves the compiled ZKIR circuit bytecodes from \`public/zkir/${baseContractName}/\` (via \`FetchZkConfigProvider\`).
+    5. **MidnightProvider**: Provides \`{ submitTx }\` delegating to Lace's \`submitTransaction\`.
+    6. **PrivateStateProvider**: In-browser local private state manager for storing off-chain witness data.
 - **Configuration** (\`src/infrastructure/config/midnight.config.ts\`):
   - Centralized network endpoints and contract deployment parameters matching \`deployment.config.json\`.
 
@@ -238,10 +648,11 @@ ${saltSection}${ownerSection}${deployerSection}- **Network ID**: ${config.networ
 ---
 
 ## 🚀 Execution Instructions
-1. Inspect the provided TypeScript contract interfaces and artifacts in \`contract/\`, \`sdk/\`, and \`deployment.config.json\`.
-2. Generate all required application source files following the Clean Architecture layout (\`domain/\`, \`application/\`, \`infrastructure/\`, \`presentation/\`).
-3. Implement the UI with the persistent **Side Panel** navigation and comprehensive **Dashboard** page.
-4. Ensure all types, imports, and provider configurations align with the Midnight Network specification.
+1. **Consult WHAT_NEWS.md & Activate Midnight Skills**: Review \`WHAT_NEWS.md\` for the latest circuit changes, multi-sig parameter requirements, and pruned view circuit guidance, and thoroughly review the skills in \`.agents/plugins/midnight-dapp-dev\` (\`midnight-dapp-dev:core\`, \`midnight-dapp-dev:dapp-connector\`, \`midnight-dapp-dev:init\`) before generating code.
+2. **Inspect Bundled Artifacts**: Inspect the provided TypeScript contract interfaces and artifacts in \`contract/\`, \`sdk/\`, and \`deployment.config.json\`.
+3. **Scaffold Clean Architecture**: Generate all required application source files following the Clean Architecture layout (\`domain/\`, \`application/\`, \`infrastructure/\`, \`presentation/\`), referencing \`.agents/plugins/midnight-dapp-dev/skills/core/templates/\` for file structures and boilerplate.
+4. **Implement UI**: Build the persistent **Side Panel** navigation and comprehensive **Dashboard** page with real-time ZK proof and transaction progress steppers.
+5. **Ensure Midnight Standards**: Ensure all types, imports, wallet connections via \`window.midnight\`, and provider configurations align with the \`midnight-dapp-dev\` skills and Midnight Network specification.
 `;
 }
 
@@ -407,6 +818,8 @@ export async function GET(req: NextRequest) {
         if (searchParams.get('explorerUrl')) queryOverride.explorerUrl = searchParams.get('explorerUrl')!;
 
         const config = generateDeploymentConfig(baseContractName, queryOverride);
+        const contractInfo = await loadContractInfo(baseContractName);
+        const whatsNews = generateWhatsNews(baseContractName, config, contractInfo);
         const masterPrompt = generateGeminiDAppPrompt(baseContractName, config, detectedFiles);
 
         if (isPreview) {
@@ -416,6 +829,7 @@ export async function GET(req: NextRequest) {
                 detectedFiles,
                 deploymentConfig: config,
                 masterPrompt,
+                whatsNews,
             });
         }
 
@@ -435,6 +849,9 @@ export async function GET(req: NextRequest) {
         zip.file('deployment.config.json', configJson);
         zip.file('deployment.json', configJson);
 
+        // Add What's New Guide
+        zip.file('WHAT_NEWS.md', whatsNews);
+
         // Add Master Gemini Prompt
         zip.file('GEMINI_DAPP_PROMPT.md', masterPrompt);
 
@@ -444,7 +861,8 @@ export async function GET(req: NextRequest) {
 This bundle contains all compiled smart contract artifacts, ZKIR circuit bytecodes, TypeScript client SDK, documentation, and configuration for **${baseContractName}**.
 
 ## Contents:
-- \`GEMINI_DAPP_PROMPT.md\`: Master prompt for Gemini to scaffold your React 19 / Next.js frontend!
+- \`WHAT_NEWS.md\`: Detailed breakdown of new or updated circuits, parameter signatures, ledger schemas, pruned view circuits, and Clean Architecture frontend migration instructions for Gemini.
+- \`GEMINI_DAPP_PROMPT.md\`: Master prompt instructing Gemini to scaffold your React 19 / Next.js frontend using the Midnight skills in \`.agents/plugins/midnight-dapp-dev\`.
 - \`deployment.config.json\` / \`deployment.json\`: Midnight network and contract connection parameters (including current contractAddress).
 - \`contract/\`: Compiled contract runtime (\`index.js\`, \`index.d.ts\`).
 - \`zkir/\`: Circuit Zero-Knowledge Intermediate Representation files.
@@ -506,6 +924,8 @@ export async function POST(req: NextRequest) {
         }
 
         const config = generateDeploymentConfig(baseContractName, deploymentConfigOverride);
+        const contractInfo = await loadContractInfo(baseContractName);
+        const whatsNews = generateWhatsNews(baseContractName, config, contractInfo);
 
         const { artifacts, detectedFiles } = await collectContractArtifacts(baseContractName);
         const masterPrompt = generateGeminiDAppPrompt(baseContractName, config, detectedFiles);
@@ -524,6 +944,7 @@ export async function POST(req: NextRequest) {
         const configJson = JSON.stringify(config, null, 2);
         zip.file('deployment.config.json', configJson);
         zip.file('deployment.json', configJson);
+        zip.file('WHAT_NEWS.md', whatsNews);
         zip.file('GEMINI_DAPP_PROMPT.md', masterPrompt);
 
         const readmeContent = `# ${baseContractName} - Midnight DApp Export Bundle
@@ -531,7 +952,8 @@ export async function POST(req: NextRequest) {
 This bundle contains all compiled smart contract artifacts, ZKIR circuit bytecodes, TypeScript client SDK, documentation, and configuration for **${baseContractName}**.
 
 ## Contents:
-- \`GEMINI_DAPP_PROMPT.md\`: Master prompt for Gemini to scaffold your React 19 / Next.js frontend!
+- \`WHAT_NEWS.md\`: Detailed breakdown of new or updated circuits, parameter signatures, ledger schemas, pruned view circuits, and Clean Architecture frontend migration instructions for Gemini.
+- \`GEMINI_DAPP_PROMPT.md\`: Master prompt instructing Gemini to scaffold your React 19 / Next.js frontend using the Midnight skills in \`.agents/plugins/midnight-dapp-dev\`.
 - \`deployment.config.json\` / \`deployment.json\`: Midnight network and contract connection parameters (including current contractAddress).
 - \`contract/\`: Compiled contract runtime (\`index.js\`, \`index.d.ts\`).
 - \`zkir/\`: Circuit Zero-Knowledge Intermediate Representation files.

@@ -416,24 +416,6 @@ export circuit emergencyWithdraw(
   return true;
 }
 
-// ============ Multi-Sig View Circuits ============
-
-export circuit getMultisigNonce(): Uint<64> {
-  return _multisigNonce;
-}
-
-export circuit getMultisigThreshold(): Uint<8> {
-  return _multisigThreshold;
-}
-
-export circuit getMultisigSignerCount(): Uint<8> {
-  return _multisigSignerCount;
-}
-
-export circuit isMultisigSigner(commitment: Bytes<32>): Boolean {
-  return _multisigSigners.member(disclose(commitment));
-}
-
 // ============ Internal State Mutation Helpers ============
 
 circuit _transfer(

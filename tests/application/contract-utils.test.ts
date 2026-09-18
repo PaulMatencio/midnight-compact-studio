@@ -91,6 +91,27 @@ describe('parseContractConstructorParams', () => {
         expect(saltParam?.type).toBe('string');
     });
 
+    it('parses constructor parameters for fungible-token-v2-4 with multisig and salt', () => {
+        const params = parseContractConstructorParams('fungible-token-v2-4');
+        expect(params.length).toBe(8);
+        expect(params.map((p) => p.name)).toEqual([
+            'salt_',
+            'initialOwner',
+            'name_',
+            'symbol_',
+            'decimals_',
+            'maxSupply_',
+            'initialSigners',
+            'threshold_'
+        ]);
+        const saltParam = params.find((p) => p.name === 'salt_');
+        expect(saltParam?.required).toBe(false);
+        const signersParam = params.find((p) => p.name === 'initialSigners');
+        expect(signersParam).toBeDefined();
+        const thresholdParam = params.find((p) => p.name === 'threshold_');
+        expect(thresholdParam?.defaultValue).toBe('2');
+    });
+
     it('returns empty array for unknown or non-existent contracts', () => {
         expect(parseContractConstructorParams('non-existent-contract-xyz')).toEqual([]);
     });

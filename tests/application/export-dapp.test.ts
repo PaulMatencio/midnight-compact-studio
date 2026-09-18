@@ -26,6 +26,9 @@ describe('Export DApp Bundle API (/api/workspace/export-dapp)', () => {
 
         // Master prompt must mention the contract, Midnight architecture, Clean Architecture, Side Panel, and Dashboard
         expect(data.masterPrompt).toContain('# Midnight Network DApp Frontend Architecture Prompt: FungibleToken');
+        expect(data.masterPrompt).toContain('.agents/plugins/midnight-dapp-dev');
+        expect(data.masterPrompt).toContain('midnight-dapp-dev:core');
+        expect(data.masterPrompt).toContain('midnight-dapp-dev:dapp-connector');
         expect(data.masterPrompt).toContain('WalletProvider');
         expect(data.masterPrompt).toContain('PublicDataProvider');
         expect(data.masterPrompt).toContain('ProofProvider');
@@ -33,6 +36,12 @@ describe('Export DApp Bundle API (/api/workspace/export-dapp)', () => {
         expect(data.masterPrompt).toContain('Clean Architecture');
         expect(data.masterPrompt).toContain('Side Panel');
         expect(data.masterPrompt).toContain('Dashboard');
+        expect(data.masterPrompt).toContain('WHAT_NEWS.md');
+
+        // What's New must be generated and returned in preview
+        expect(typeof data.whatsNews).toBe('string');
+        expect(data.whatsNews).toContain("# WHAT'S NEW: Smart Contract Updates & Frontend Migration Guide");
+        expect(data.whatsNews).toContain('FungibleToken');
 
         // Verify deploymentConfig uses MIDNIGHT_CONFIG defaults
         expect(data.deploymentConfig.networkId).toBe(MIDNIGHT_CONFIG.networkId);
@@ -139,6 +148,7 @@ describe('Export DApp Bundle API (/api/workspace/export-dapp)', () => {
         expect(filenames).toContain('contract/index.js');
         expect(filenames).toContain('deployment.config.json');
         expect(filenames).toContain('GEMINI_DAPP_PROMPT.md');
+        expect(filenames).toContain('WHAT_NEWS.md');
         expect(filenames).toContain('README.md');
 
         // Verify deployment.config.json has our custom address
@@ -152,6 +162,69 @@ describe('Export DApp Bundle API (/api/workspace/export-dapp)', () => {
         const promptText = await zip.file('GEMINI_DAPP_PROMPT.md')?.async('text');
         expect(promptText).toBeDefined();
         expect(promptText).toContain(customConfig.contractAddress);
+        expect(promptText).toContain('WHAT_NEWS.md');
+
+        // Verify WHAT_NEWS.md is packaged
+        const whatsNewsText = await zip.file('WHAT_NEWS.md')?.async('text');
+        expect(whatsNewsText).toBeDefined();
+        expect(whatsNewsText).toContain("# WHAT'S NEW: Smart Contract Updates & Frontend Migration Guide");
+
+        // Verify README.md lists WHAT_NEWS.md
+        const readmeText = await zip.file('README.md')?.async('text');
+        expect(readmeText).toBeDefined();
+        expect(readmeText).toContain('WHAT_NEWS.md');
+    });
+
+    it('generates WHAT_NEWS.md with new/updated circuits, pruned view circuit guidance, and Clean Architecture instructions for fungible-token-v2-4', async () => {
+        const req = new NextRequest(
+            'http://localhost:3000/api/workspace/export-dapp?contract=fungible-token-v2-4&preview=true'
+        );
+        const res = await GET(req);
+        expect(res.status).toBe(200);
+
+        const data = await res.json();
+        expect(data.success).toBe(true);
+        expect(data.contract).toBe('fungible-token-v2-4');
+        expect(typeof data.whatsNews).toBe('string');
+        expect(data.whatsNews.length).toBeGreaterThan(0);
+
+        // Header and metadata
+        expect(data.whatsNews).toContain("# WHAT'S NEW: Smart Contract Updates & Frontend Migration Guide");
+        expect(data.whatsNews).toContain('FungibleTokenV24');
+
+        // Multi-sig governance on Jubjub curve
+        expect(data.whatsNews).toContain('Multi-Sig Governance');
+        expect(data.whatsNews).toContain('Jubjub');
+        expect(data.whatsNews).toContain('SchnorrSignature');
+        expect(data.whatsNews).toContain('`mint`');
+        expect(data.whatsNews).toContain('`burn`');
+        expect(data.whatsNews).toContain('`setEmergencyPauser`');
+
+        // Deflationary self-burn
+        expect(data.whatsNews).toContain('Self-Burn');
+        expect(data.whatsNews).toContain('`selfBurn`');
+
+        // Emergency pause
+        expect(data.whatsNews).toContain('`pause`');
+        expect(data.whatsNews).toContain('`unpause`');
+
+        // Admin recovery
+        expect(data.whatsNews).toContain('`adminReallocate`');
+
+        // Warning against calling pruned view circuits on-chain
+        expect(data.whatsNews).toContain('CRITICAL: Pruned View Circuits & Direct Public Ledger Queries');
+        expect(data.whatsNews).toContain('DO NOT generate circuit-call transactions for read-only / view operations');
+        expect(data.whatsNews).toContain('contract.ledger');
+
+        // Clean Architecture layer updates
+        expect(data.whatsNews).toContain('Domain Layer (`src/domain/`)');
+        expect(data.whatsNews).toContain('src/domain/ports/i-contract.gateway.ts');
+        expect(data.whatsNews).toContain('Application Layer (`src/application/use-cases/`)');
+        expect(data.whatsNews).toContain('Infrastructure Layer (`src/infrastructure/`)');
+        expect(data.whatsNews).toContain('Presentation Layer (`src/presentation/`)');
+
+        // Master prompt must also reference WHAT_NEWS.md
+        expect(data.masterPrompt).toContain('WHAT_NEWS.md');
     });
 
     it('re-exports midnight-config.ts identically and generates deployment config', () => {

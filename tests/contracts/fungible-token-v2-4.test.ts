@@ -270,27 +270,25 @@ describe('FungibleToken Contract v2.4', () => {
     });
   });
 
-  describe('Multi-Sig View Circuits', () => {
-    it('returns the current multisig nonce via circuit', () => {
-      const nonce = runCircuit(contract.circuits.getMultisigNonce);
-      expect(nonce).toBe(0n);
+  describe('Multi-Sig Ledger State Inspection', () => {
+    it('returns the current multisig nonce from ledger', () => {
+      expect(getLedger()._multisigNonce).toBe(0n);
     });
 
-    it('returns the current multisig threshold via circuit', () => {
-      const threshold = runCircuit(contract.circuits.getMultisigThreshold);
-      expect(threshold).toBe(THRESHOLD);
+    it('returns the current multisig threshold from ledger', () => {
+      expect(getLedger()._multisigThreshold).toBe(THRESHOLD);
     });
 
-    it('returns the multisig signer count via circuit', () => {
-      const signerCount = runCircuit(contract.circuits.getMultisigSignerCount);
-      expect(signerCount).toBe(3n);
+    it('returns the multisig signer count from ledger', () => {
+      expect(getLedger()._multisigSignerCount).toBe(3n);
     });
 
-    it('verifies membership of registered and unregistered signers', () => {
-      expect(runCircuit(contract.circuits.isMultisigSigner, SIGNER_1)).toBe(true);
-      expect(runCircuit(contract.circuits.isMultisigSigner, SIGNER_2)).toBe(true);
-      expect(runCircuit(contract.circuits.isMultisigSigner, SIGNER_3)).toBe(true);
-      expect(runCircuit(contract.circuits.isMultisigSigner, createKey(99))).toBe(false);
+    it('verifies membership of registered and unregistered signers in ledger set', () => {
+      const signers = getLedger()._multisigSigners;
+      expect(signers.member(SIGNER_1)).toBe(true);
+      expect(signers.member(SIGNER_2)).toBe(true);
+      expect(signers.member(SIGNER_3)).toBe(true);
+      expect(signers.member(createKey(99))).toBe(false);
     });
   });
 

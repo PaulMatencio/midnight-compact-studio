@@ -298,11 +298,11 @@ ${code.includes('_multisig') || code.includes('SchnorrSignature') || code.includ
         - \`calculateMintDigest(contractAddress: string | Uint8Array, nonce: bigint | number, to: Uint8Array | string, amount: bigint | number): Uint8Array\`
         - \`calculateBurnDigest(contractAddress: string | Uint8Array, nonce: bigint | number, account: Uint8Array | string, amount: bigint | number): Uint8Array\`
         - \`calculateSetEmergencyPauserDigest(contractAddress: string | Uint8Array, nonce: bigint | number, newPauser: Uint8Array | string): Uint8Array\`
-      - Provide multi-sig inspection methods:
-        - \`getMultisigNonce(context: CircuitContext<PS>): CircuitResults<PS, bigint>\`
-        - \`getMultisigThreshold(context: CircuitContext<PS>): CircuitResults<PS, bigint>\`
-        - \`getMultisigSignerCount(context: CircuitContext<PS>): CircuitResults<PS, bigint>\`
-        - \`isMultisigSigner(context: CircuitContext<PS>, commitment: Uint8Array | string): CircuitResults<PS, boolean>\`
+      - Provide multi-sig inspection methods querying public ledger state directly:
+        - \`getMultisigNonce(ledgerState: ${pascalName}LedgerState | StateValue | ChargedState | unknown): bigint\`
+        - \`getMultisigThreshold(ledgerState: ${pascalName}LedgerState | StateValue | ChargedState | unknown): bigint\`
+        - \`getMultisigSignerCount(ledgerState: ${pascalName}LedgerState | StateValue | ChargedState | unknown): bigint\`
+        - \`isMultisigSigner(ledgerState: ${pascalName}LedgerState | StateValue | ChargedState | unknown, commitment: Uint8Array | string): boolean\`
         - \`calculateSignerCommitment(pk: JubjubPoint, salt?: Uint8Array | string): Uint8Array\` (using \`pureCircuits.calculateSignerCommitment\`).
       - Governed circuits (\`mint\`, \`burn\`, \`setEmergencyPauser\`) take threshold arrays: \`pubkeys: JubjubPoint[]\` and \`signatures: SchnorrSignature[]\`.
 ` : ''}

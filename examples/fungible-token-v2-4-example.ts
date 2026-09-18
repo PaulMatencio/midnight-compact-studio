@@ -116,26 +116,19 @@ async function main(): Promise<void> {
   currentLedger = client.queryLedgerStateFromRaw(currentChargedState);
   console.log(' - Contract Paused State after reset:', currentLedger._paused);
 
-  // 7. Query Multi-Sig View Circuits
-  console.log('\nQuerying Multi-Sig Circuits...');
-  circuitCtx = CompactRuntime.createCircuitContext(
-    contractAddress,
-    coinPublicKey,
-    currentChargedState,
-    privateState
-  );
+  // 7. Query Multi-Sig State from Public Ledger
+  console.log('\nQuerying Multi-Sig Ledger State...');
+  const nonce = client.getMultisigNonce(currentLedger);
+  const multisigThreshold = client.getMultisigThreshold(currentLedger);
+  const signerCount = client.getMultisigSignerCount(currentLedger);
+  const isSigner1 = client.isMultisigSigner(currentLedger, signer1);
+  const isUnknownSigner = client.isMultisigSigner(currentLedger, new Uint8Array(32).fill(0xff));
 
-  const nonceResult = client.getMultisigNonce(circuitCtx);
-  const thresholdResult = client.getMultisigThreshold(circuitCtx);
-  const signerCountResult = client.getMultisigSignerCount(circuitCtx);
-  const isSigner1Result = client.isMultisigSigner(circuitCtx, signer1);
-  const isUnknownSignerResult = client.isMultisigSigner(circuitCtx, new Uint8Array(32).fill(0xff));
-
-  console.log(' - Multisig Nonce:', nonceResult.result.toString());
-  console.log(' - Multisig Threshold:', thresholdResult.result.toString());
-  console.log(' - Multisig Signer Count:', signerCountResult.result.toString());
-  console.log(' - Signer 1 Registered?:', isSigner1Result.result);
-  console.log(' - Unknown Signer Registered?:', isUnknownSignerResult.result);
+  console.log(' - Multisig Nonce:', nonce.toString());
+  console.log(' - Multisig Threshold:', multisigThreshold.toString());
+  console.log(' - Multisig Signer Count:', signerCount.toString());
+  console.log(' - Signer 1 Registered?:', isSigner1);
+  console.log(' - Unknown Signer Registered?:', isUnknownSigner);
 
   console.log('\nWalkthrough completed successfully.');
 }

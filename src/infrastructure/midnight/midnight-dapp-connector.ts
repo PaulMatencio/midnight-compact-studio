@@ -792,31 +792,65 @@ export async function balanceAndSubmitLaceTx(
         throw new Error('Lace returned an empty balanced transaction.');
     }
 
+    // Step 1: Extract transaction identifier directly from balanced transaction bytes
+    let txHash: string | undefined;
+    try {
+        const cleanHex = balancedTxHex.replace(/^0x/, '').trim();
+        const bytes = typeof Buffer !== 'undefined'
+            ? Buffer.from(cleanHex, 'hex')
+            : hexToUint8Array(cleanHex);
+        const { Transaction } = await import('@midnight-ntwrk/ledger-v8');
+        const txObj = Transaction.deserialize('signature', 'proof', 'binding', bytes);
+        const ids = txObj.identifiers();
+        if (ids && ids.length > 0) {
+            txHash = ids[0];
+        } else if (typeof txObj.transactionHash === 'function') {
+            txHash = String(txObj.transactionHash());
+        }
+    } catch (extractErr) {
+        console.warn('[Midnight Lace Connector] Could not extract txHash from balanced tx:', extractErr);
+    }
+
     onProgress?.('Broadcasting balanced transaction to Midnight network via Lace...');
     console.log('[Midnight Lace Connector] Calling api.submitTransaction...');
 
-    let txHash: string | undefined;
+    let laceSubmitted = false;
     let laceBroadcastErr: any = null;
 
     if (typeof api.submitTransaction === 'function') {
         try {
             const res = await api.submitTransaction(balancedTxHex);
+            // In Midnight DApp Connector spec, submitTransaction returns Promise<void>.
+            // If it returned a custom string id, preserve it.
             if (typeof res === 'string' && res.trim()) {
                 txHash = res.trim();
             }
+            laceSubmitted = true;
+            console.log('[Midnight Lace Connector] Transaction successfully submitted via Lace! TxHash:', txHash);
         } catch (submitErr: any) {
             laceBroadcastErr = submitErr;
-            console.warn('[Midnight Lace Connector] Lace api.submitTransaction failed, attempting backend Node RPC broadcast fallback...', {
-                err: submitErr,
-                message: submitErr?.message,
-                cause: submitErr?.cause,
-                name: submitErr?.name,
-            });
+            const errStr = formatLaceError(submitErr) || String(submitErr?.message || submitErr);
+            const isAlreadySubmitted =
+                errStr.includes('1012') || // Substrate 1012: temporarily banned (already in mempool)
+                errStr.includes('193') ||  // ReplayProtectionViolation / intent already on-chain
+                errStr.toLowerCase().includes('temporarily banned') ||
+                errStr.toLowerCase().includes('already in pool') ||
+                errStr.toLowerCase().includes('duplicate');
+
+            if (isAlreadySubmitted) {
+                console.log('[Midnight Lace Connector] Transaction was already accepted by the node:', errStr);
+                laceSubmitted = true;
+            } else {
+                console.warn('[Midnight Lace Connector] Lace api.submitTransaction failed, checking fallback...', {
+                    err: submitErr,
+                    formatted: errStr,
+                });
+            }
         }
     }
 
     // Fallback: If Lace submitTransaction failed or was unavailable, broadcast via Studio backend Midnight Node RPC
-    if (!txHash) {
+    if (!laceSubmitted) {
         onProgress?.('Broadcasting transaction via Studio Node RPC fallback...');
         console.log('[Midnight Lace Connector] Broadcasting balanced transaction via /api/contract/broadcast...');
         try {
@@ -828,6 +862,7 @@ export async function balanceAndSubmitLaceTx(
             const broadcastJson = await broadcastRes.json();
             if (broadcastRes.ok && broadcastJson.success && broadcastJson.data?.txHash) {
                 txHash = broadcastJson.data.txHash;
+                laceSubmitted = true;
                 console.log('[Midnight Lace Connector] Transaction successfully broadcasted via backend Node RPC! TxHash:', txHash);
             } else {
                 const nodeMsg = broadcastJson.error || '';
@@ -845,23 +880,6 @@ export async function balanceAndSubmitLaceTx(
                 throw new Error(`Failed to broadcast transaction via Lace: ${formatLaceError(laceBroadcastErr)}`);
             }
             throw fbErr;
-        }
-    }
-
-    // If submitTransaction did not return the transaction hash, extract from transaction
-    if (!txHash) {
-        try {
-            const { Transaction } = await import('@midnight-ntwrk/ledger-v8');
-            const bytes = typeof Buffer !== 'undefined'
-                ? Buffer.from(balancedTxHex, 'hex')
-                : hexToUint8Array(balancedTxHex);
-            const txObj = Transaction.deserialize('signature', 'proof', 'binding', bytes);
-            const ids = txObj.identifiers();
-            if (ids && ids.length > 0) {
-                txHash = ids[0];
-            }
-        } catch {
-            txHash = `tx-${Date.now()}`;
         }
     }
 

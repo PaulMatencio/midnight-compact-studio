@@ -52,11 +52,6 @@ export type ImpureCircuits<PS> = {
                     caller_0: Uint8Array,
                     token_0: { bytes: Uint8Array },
                     amount_0: bigint): __compactRuntime.CircuitResults<PS, boolean>;
-  getMultisigNonce(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  getMultisigThreshold(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  getMultisigSignerCount(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  isMultisigSigner(context: __compactRuntime.CircuitContext<PS>,
-                   commitment_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
 }
 
 export type ProvableCircuits<PS> = {
@@ -101,11 +96,6 @@ export type ProvableCircuits<PS> = {
                     caller_0: Uint8Array,
                     token_0: { bytes: Uint8Array },
                     amount_0: bigint): __compactRuntime.CircuitResults<PS, boolean>;
-  getMultisigNonce(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  getMultisigThreshold(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  getMultisigSignerCount(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  isMultisigSigner(context: __compactRuntime.CircuitContext<PS>,
-                   commitment_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
 }
 
 export type PureCircuits = {
@@ -158,11 +148,6 @@ export type Circuits<PS> = {
                     caller_0: Uint8Array,
                     token_0: { bytes: Uint8Array },
                     amount_0: bigint): __compactRuntime.CircuitResults<PS, boolean>;
-  getMultisigNonce(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  getMultisigThreshold(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  getMultisigSignerCount(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  isMultisigSigner(context: __compactRuntime.CircuitContext<PS>,
-                   commitment_0: Uint8Array): __compactRuntime.CircuitResults<PS, boolean>;
 }
 
 export type Ledger = {

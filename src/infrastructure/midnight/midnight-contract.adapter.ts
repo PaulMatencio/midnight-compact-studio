@@ -53,6 +53,40 @@ if (typeof globalThis.Reflect?.get === 'function') {
 import * as crypto from 'node:crypto';
 import type { FileTransactionHistoryStorage } from '@/src/lib/file-transaction-history-storage';
 
+export function extractDeepErrorMessage(err: any): string {
+    if (!err) return '';
+    const messages: string[] = [];
+    let curr: any = err;
+    let depth = 0;
+    while (curr && depth < 10) {
+        if (typeof curr === 'string') {
+            if (curr.trim()) messages.push(curr.trim());
+            break;
+        }
+        if (curr.message && typeof curr.message === 'string' && curr.message.trim()) {
+            messages.push(curr.message.trim());
+        }
+        if (curr.reason && typeof curr.reason === 'string' && curr.reason.trim()) {
+            messages.push(curr.reason.trim());
+        }
+        if (curr.name && typeof curr.name === 'string' && curr.name !== 'Error' && curr.name !== 'FiberFailure') {
+            messages.push(curr.name);
+        }
+        curr = curr.cause || curr.defect || curr.failure || curr.error || curr._cause;
+        depth++;
+    }
+    try {
+        const str = typeof err.toString === 'function' ? err.toString() : '';
+        if (str && !messages.some(m => str.includes(m))) {
+            messages.push(str);
+        }
+    } catch {}
+    if (err?.stack && typeof err.stack === 'string') {
+        messages.push(err.stack);
+    }
+    return messages.filter(Boolean).join(' -> ') || String(err);
+}
+
 export function createWitnesses(contractType: string, walletCtx?: any): Record<string, any> {
     const defaultWitnesses: Record<string, any> = {
         localSecretKey: ({ privateState }: any) => {
@@ -127,13 +161,6 @@ export function deriveAccountForContract(
             localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)],
             getSchnorrReduction: (ctx: any) => [ctx.privateState, [0n, 0n]],
         });
-        if (typeof (dummyContract as any)._persistentHash_1 === 'function') {
-            try {
-                return (dummyContract as any)._persistentHash_1([domainTag, saltBytes, secretKey]);
-            } catch {
-                return (dummyContract as any)._persistentHash_1([domainTag, { bytes: saltBytes }, secretKey]);
-            }
-        }
         const proto = Object.getPrototypeOf(dummyContract);
         const hashMethods = Object.getOwnPropertyNames(proto).filter((k) => k.startsWith('_persistentHash'));
         for (const method of hashMethods) {
@@ -178,8 +205,16 @@ export class MidnightContractAdapter implements IContractGateway {
         let contractModule: any;
         try {
             // Use runtime Function constructor to avoid Webpack/Turbopack static analysis and module mangling
-            const dynamicImport = new Function('specifier', 'return import(specifier)');
-            contractModule = await dynamicImport(contractUrl);
+            try {
+                const dynamicImport = new Function('specifier', 'return import(specifier)');
+                contractModule = await dynamicImport(contractUrl);
+            } catch (err: any) {
+                if (err?.code === 'ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING') {
+                    contractModule = await import(contractJsPath);
+                } else {
+                    throw err;
+                }
+            }
         } catch (importErr: any) {
             console.error(`Failed to dynamically load contract module for ${contractType}:`, importErr);
             throw new Error(`Failed to load contract runtime for ${contractType}: ${importErr.message}`);
@@ -268,8 +303,16 @@ export class MidnightContractAdapter implements IContractGateway {
         try {
             tx = await circuitFn(...args);
         } catch (err: any) {
-            const errMsg = err?.message || String(err);
-            console.error(`[ContractAdapter] Execution error for '${circuitName}':`, err);
+            const errMsg = extractDeepErrorMessage(err);
+            console.error(`[ContractAdapter] Execution error for '${circuitName}':`, err, { errMsg });
+            if (
+                errMsg.includes('1010') ||
+                errMsg.includes('exhaust the block limits')
+            ) {
+                throw new Error(
+                    `Substrate Node Error 1010 (Transaction would exhaust the block limits): Transaction '${circuitName}' exceeds the Substrate block limits. Please inspect operation parameters and state write footprint.`
+                );
+            }
             if (
                 errMsg.includes('170') ||
                 errMsg.includes('InvalidDustSpendProof') ||
@@ -378,8 +421,16 @@ export class MidnightContractAdapter implements IContractGateway {
                 initialPrivateState: {},
             });
         } catch (err: any) {
-            const errMsg = err?.message || String(err);
-            console.error(`[DeployAdapter] Deployment error for '${contractType}':`, err);
+            const errMsg = extractDeepErrorMessage(err);
+            console.error(`[DeployAdapter] Deployment error for '${contractType}':`, err, { errMsg });
+            if (
+                errMsg.includes('1010') ||
+                errMsg.includes('exhaust the block limits')
+            ) {
+                throw new Error(
+                    `Substrate Node Error 1010 (Transaction would exhaust the block limits): The deployment transaction for '${contractType}' exceeds the Substrate Normal extrinsic block weight limit (~37,500 bytes for bytesWritten). Reduce the number of exported circuits by replacing redundant view circuits with direct public ledger state queries.`
+                );
+            }
             if (
                 errMsg.includes('170') ||
                 errMsg.includes('InvalidDustSpendProof') ||
@@ -698,13 +749,24 @@ export class MidnightContractAdapter implements IContractGateway {
 
         console.log(`[DeployAdapter] Preparing deployment for '${contractType}' with Lace/Extension...`);
 
-        const effectiveSeed = options.seed?.trim() || process.env.WALLET_SEED?.trim() || process.env.MIDNIGHT_WALLET_SEED?.trim();
+        // If an external deployer (e.g. Lace) is provided and no explicit seed is passed, use decoupled context directly
+        // to avoid blocking or failing if the local Studio wallet database is corrupted.
+        const explicitSeed = options.seed?.trim();
         let walletCtx: any = null;
-        if (effectiveSeed) {
+        if (explicitSeed) {
             try {
-                walletCtx = await this.walletGateway.getOrCreateWalletContext(effectiveSeed);
+                walletCtx = await this.walletGateway.getOrCreateWalletContext(explicitSeed);
             } catch (e) {
-                console.warn('[DeployAdapter] Could not initialize wallet context from seed, using decoupled context:', e);
+                console.warn('[DeployAdapter] Could not initialize wallet context from explicit seed, using decoupled context:', e);
+            }
+        } else if (!options.deployerAddress) {
+            const envSeed = process.env.WALLET_SEED?.trim() || process.env.MIDNIGHT_WALLET_SEED?.trim();
+            if (envSeed) {
+                try {
+                    walletCtx = await this.walletGateway.getOrCreateWalletContext(envSeed);
+                } catch (e) {
+                    console.warn('[DeployAdapter] Could not initialize wallet context from env seed, using decoupled context:', e);
+                }
             }
         }
         if (!walletCtx) {
@@ -925,28 +987,53 @@ export class MidnightContractAdapter implements IContractGateway {
 
         console.log(`[DeployAdapter] Broadcasting pre-balanced transaction ${txHash} to Midnight node RPC...`);
 
-        const effectiveSeed = process.env.WALLET_SEED?.trim() || process.env.MIDNIGHT_WALLET_SEED?.trim() || 'bfddeea52c8e16ebc8b278f4bb5a76604982046d690e7c6f3139831c6888861d';
-        const walletCtx = await this.walletGateway.getOrCreateWalletContext(effectiveSeed);
-
         try {
-            const submittedId = await walletCtx.wallet.submitTransaction(txObj);
-            const finalHash = typeof submittedId === 'string' ? submittedId : (submittedId?.toString?.() || txHash);
-            console.log(`[DeployAdapter] Pre-balanced transaction accepted by node! ID: ${finalHash}`);
-            return { txHash: finalHash };
-        } catch (err: any) {
-            const errMsg = err?.message || String(err);
-            console.error('[DeployAdapter] Error broadcasting pre-balanced transaction to node:', err);
-            if (errMsg.includes('170') || errMsg.includes('InvalidDustSpendProof')) {
+            const { makeDefaultSubmissionService } = await import('@midnight-ntwrk/wallet-sdk-capabilities');
+            const relayURL = new URL(MIDNIGHT_CONFIG.nodeRpc.replace(/^http/, 'ws'));
+            const submissionService = makeDefaultSubmissionService({ relayURL });
+            try {
+                await submissionService.submitTransaction(txObj as any, 'Submitted');
+                console.log(`[DeployAdapter] Pre-balanced transaction accepted by node mempool! ID: ${txHash}`);
+                return { txHash };
+            } finally {
+                await submissionService.close().catch(() => {});
+            }
+        } catch (subServiceErr: any) {
+            const deepErrMsg = extractDeepErrorMessage(subServiceErr);
+            console.warn('[DeployAdapter] Direct submission service response:', { subServiceErr, deepErrMsg });
+
+            // Check if transaction was already submitted to mempool/block
+            if (
+                deepErrMsg.includes('1012') ||
+                deepErrMsg.includes('193') ||
+                deepErrMsg.toLowerCase().includes('temporarily banned') ||
+                deepErrMsg.toLowerCase().includes('already in pool') ||
+                deepErrMsg.toLowerCase().includes('duplicate')
+            ) {
+                console.log(`[DeployAdapter] Transaction ${txHash} is already accepted in node mempool/chain:`, deepErrMsg);
+                return { txHash };
+            }
+
+            if (deepErrMsg.includes('1010') || deepErrMsg.includes('exhaust the block limits')) {
+                throw new Error(
+                    'Substrate Node Error 1010 (Transaction would exhaust the block limits): The transaction exceeds the Substrate Normal extrinsic block weight limit (~37,500 bytes for bytesWritten). Reduce the number of exported circuits by replacing redundant view circuits with direct public ledger state queries.'
+                );
+            }
+            if (deepErrMsg.includes('170') || deepErrMsg.includes('InvalidDustSpendProof')) {
                 throw new Error(
                     'Substrate Node Error 170 (InvalidDustSpendProof): The transaction was rejected because your Lace wallet internal DUST Merkle tree is out of sync with the Preprod network. Please resync or reset your Lace extension wallet.'
                 );
             }
-            if (errMsg.includes('171') || errMsg.includes('OutOfDustValidityWindow')) {
+            if (deepErrMsg.includes('171') || deepErrMsg.includes('OutOfDustValidityWindow')) {
                 throw new Error(
                     'Substrate Node Error 171 (OutOfDustValidityWindow): The transaction expired before reaching the node. Please re-submit.'
                 );
             }
-            throw new Error(`Node rejected transaction: ${errMsg}`);
+
+            const cleanMsg = subServiceErr?.message && subServiceErr.message !== 'Transaction submission error'
+                ? subServiceErr.message
+                : (deepErrMsg || String(subServiceErr));
+            throw new Error(`Node rejected transaction: ${cleanMsg}`);
         }
     }
 }

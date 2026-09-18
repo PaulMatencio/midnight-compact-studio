@@ -100,11 +100,8 @@ To ensure full compatibility with the local Compact toolchain (language version 
    - Increments `_multisigNonce`.
    - Sets `_emergencyPauser = disclose(newPauser)`.
 
-4. **Multi-Sig Inspection Circuits**:
-   - `getMultisigNonce(): Uint<64>`
-   - `getMultisigThreshold(): Uint<8>`
-   - `getMultisigSignerCount(): Uint<8>`
-   - `isMultisigSigner(commitment: Bytes<32>): Boolean`
+4. **Multi-Sig Inspection (Off-Chain Public Ledger Queries)**:
+   - `_multisigNonce`, `_multisigThreshold`, `_multisigSignerCount`, and `_multisigSigners` are exported public ledger fields read directly off-chain via SDK (`queryLedgerStateFromRaw` / `getMultisigNonce`, etc.) without requiring ZK view circuits, saving ~6.5 KB of on-chain verifier keys to stay strictly under Substrate's 37,500 byte normal block limit.
    - `calculateSignerCommitment(pk: JubjubPoint, salt: Bytes<32>): Bytes<32>` (pure circuit for off-chain commitment derivation)
 
 5. **Constructor Signature**:

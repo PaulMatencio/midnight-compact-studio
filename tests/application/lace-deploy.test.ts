@@ -60,24 +60,76 @@ describe('Lace Browser Deployment Architecture', () => {
     });
 
     describe('balanceAndSubmitLaceTx', () => {
-        it('calls balanceUnsealedTransaction and submitTransaction on Lace API', async () => {
+        it('calls balanceUnsealedTransaction and handles void-returning submitTransaction (DApp Connector spec)', async () => {
+            const mockApi = {
+                balanceUnsealedTransaction: vi.fn().mockResolvedValue('balanced-tx-hex-string'),
+                // Midnight DApp Connector API spec: submitTransaction(tx: string): Promise<void>
+                submitTransaction: vi.fn().mockResolvedValue(undefined),
+            };
+
+            const fetchSpy = vi.fn();
+            const originalFetch = global.fetch;
+            global.fetch = fetchSpy as any;
+
+            try {
+                const progressLogs: string[] = [];
+                const result = await balanceAndSubmitLaceTx(
+                    mockApi as any,
+                    'unsealed-tx-hex-data',
+                    (msg) => progressLogs.push(msg)
+                );
+
+                expect(result.txHash).toBeDefined();
+                expect(typeof result.txHash).toBe('string');
+                expect(result.balancedTxHex).toBe('balanced-tx-hex-string');
+                expect(mockApi.balanceUnsealedTransaction).toHaveBeenCalledWith('unsealed-tx-hex-data', {});
+                expect(mockApi.submitTransaction).toHaveBeenCalledWith('balanced-tx-hex-string');
+                // Crucial: Fallback broadcast to /api/contract/broadcast must NOT be called when Lace submitTransaction resolves!
+                expect(fetchSpy).not.toHaveBeenCalled();
+                expect(progressLogs.some(p => p.includes('Prompting Lace'))).toBe(true);
+            } finally {
+                global.fetch = originalFetch;
+            }
+        });
+
+        it('preserves string txId if submitTransaction returns a non-empty string', async () => {
             const mockApi = {
                 balanceUnsealedTransaction: vi.fn().mockResolvedValue('balanced-tx-hex-string'),
                 submitTransaction: vi.fn().mockResolvedValue('submitted-tx-id-777'),
             };
 
-            const progressLogs: string[] = [];
             const result = await balanceAndSubmitLaceTx(
                 mockApi as any,
                 'unsealed-tx-hex-data',
-                (msg) => progressLogs.push(msg)
+                () => {}
             );
 
             expect(result.txHash).toBe('submitted-tx-id-777');
             expect(result.balancedTxHex).toBe('balanced-tx-hex-string');
-            expect(mockApi.balanceUnsealedTransaction).toHaveBeenCalledWith('unsealed-tx-hex-data', {});
-            expect(mockApi.submitTransaction).toHaveBeenCalledWith('balanced-tx-hex-string');
-            expect(progressLogs.some(p => p.includes('Prompting Lace'))).toBe(true);
+        });
+
+        it('recognizes 1012 temporarily banned (in mempool) as already submitted without triggering fallback', async () => {
+            const mockApi = {
+                balanceUnsealedTransaction: vi.fn().mockResolvedValue('balanced-tx-hex-string'),
+                submitTransaction: vi.fn().mockRejectedValue(new Error('Substrate Node Error 1012: Transaction is temporarily banned')),
+            };
+
+            const fetchSpy = vi.fn();
+            const originalFetch = global.fetch;
+            global.fetch = fetchSpy as any;
+
+            try {
+                const result = await balanceAndSubmitLaceTx(
+                    mockApi as any,
+                    'unsealed-tx-hex-data',
+                    () => {}
+                );
+
+                expect(result.txHash).toBeDefined();
+                expect(fetchSpy).not.toHaveBeenCalled();
+            } finally {
+                global.fetch = originalFetch;
+            }
         });
 
         it('handles user cancellation gracefully', async () => {
@@ -163,6 +215,49 @@ describe('Lace Browser Deployment Architecture', () => {
             } finally {
                 global.fetch = originalFetch;
             }
+        });
+    });
+
+    describe('MidnightContractAdapter.resolveConstructorArgs', () => {
+        it('resolves all 8 parameters for fungible-token-v2-4 correctly', async () => {
+            const { Contract } = await import('@/contracts/managed/fungible-token-v2-4/contract/index.js');
+            const adapter = new MidnightContractAdapter({} as any, {} as any);
+            const { resolvedArgs, activeContractSalt } = (adapter as any).resolveConstructorArgs(
+                'fungible-token-v2-4',
+                Contract,
+                undefined,
+                'mn_addr_preprod1qz6q9e728h9cvd5zgvh4x55wzgvh4x55wzgvh4x55wzgvh4x55wsqqqq8uphvcv'
+            );
+
+            expect(resolvedArgs.length).toBe(8);
+            // 0: salt_
+            expect(resolvedArgs[0]).toBeInstanceOf(Uint8Array);
+            expect(resolvedArgs[0].length).toBe(32);
+            // 1: initialOwner
+            expect(resolvedArgs[1]).toBeInstanceOf(Uint8Array);
+            expect(resolvedArgs[1].length).toBe(32);
+            // 2: name_
+            expect(typeof resolvedArgs[2]).toBe('string');
+            // 3: symbol_
+            expect(typeof resolvedArgs[3]).toBe('string');
+            // 4: decimals_
+            expect(typeof resolvedArgs[4]).toBe('bigint');
+            // 5: maxSupply_
+            expect(typeof resolvedArgs[5]).toBe('bigint');
+            // 6: initialSigners (Vector<3, Bytes<32>>)
+            expect(Array.isArray(resolvedArgs[6])).toBe(true);
+            expect(resolvedArgs[6].length).toBe(3);
+            for (const s of resolvedArgs[6]) {
+                expect(s).toBeInstanceOf(Uint8Array);
+                expect(s.length).toBe(32);
+            }
+            // Verify all 3 initial signers are unique
+            const hexSet = new Set(resolvedArgs[6].map((s: Uint8Array) => Buffer.from(s).toString('hex')));
+            expect(hexSet.size).toBe(3);
+
+            // 7: threshold_
+            expect(typeof resolvedArgs[7]).toBe('bigint');
+            expect(resolvedArgs[7]).toBe(2n);
         });
     });
 });

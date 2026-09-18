@@ -49,9 +49,11 @@ export function ExportDappModal({
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [isDownloading, setIsDownloading] = useState<boolean>(false);
     const [isCopied, setIsCopied] = useState<boolean>(false);
+    const [isWhatsNewsCopied, setIsWhatsNewsCopied] = useState<boolean>(false);
     const [detectedFiles, setDetectedFiles] = useState<string[]>([]);
     const [masterPrompt, setMasterPrompt] = useState<string>('');
-    const [activeView, setActiveView] = useState<'artifacts' | 'prompt' | 'config'>('artifacts');
+    const [whatsNews, setWhatsNews] = useState<string>('');
+    const [activeView, setActiveView] = useState<'artifacts' | 'prompt' | 'whats-new' | 'config'>('artifacts');
 
     const cleanContractName = getCleanContractBaseName(contractFilename);
 
@@ -132,6 +134,7 @@ export function ExportDappModal({
             if (data.success) {
                 setDetectedFiles(data.detectedFiles || []);
                 setMasterPrompt(data.masterPrompt || '');
+                setWhatsNews(data.whatsNews || '');
                 if (
                     data.deploymentConfig?.contractAddress &&
                     !isPlaceholderAddress(data.deploymentConfig.contractAddress) &&
@@ -253,6 +256,18 @@ export function ExportDappModal({
         setTimeout(() => setIsCopied(false), 2500);
     };
 
+    // Copy What's New to Clipboard
+    const handleCopyWhatsNews = () => {
+        if (!whatsNews) return;
+        navigator.clipboard.writeText(whatsNews);
+        setIsWhatsNewsCopied(true);
+        toast.success(
+            "What's New Copied",
+            'Paste into Gemini to guide updating the frontend with new/updated circuits!'
+        );
+        setTimeout(() => setIsWhatsNewsCopied(false), 2500);
+    };
+
     // Generate Random 32-byte Hex Address
     const generateRandomAddress = () => {
         const hex = Array.from({ length: 32 }, () =>
@@ -315,9 +330,9 @@ export function ExportDappModal({
             critical: false,
         },
         {
-            name: 'Gemini Master Prompt & Config',
-            desc: 'GEMINI_DAPP_PROMPT.md and deployment.config.json generated from midnight-config.ts for this export',
-            matches: ['GEMINI_DAPP_PROMPT.md', 'deployment.config.json', 'README.md'],
+            name: 'Gemini Master Prompt, Config & Updates',
+            desc: 'GEMINI_DAPP_PROMPT.md, WHAT_NEWS.md, and deployment.config.json generated for this export',
+            matches: ['GEMINI_DAPP_PROMPT.md', 'WHAT_NEWS.md', 'deployment.config.json', 'README.md'],
             expected: 'Included automatically in ZIP',
             critical: true,
         },
@@ -380,6 +395,18 @@ export function ExportDappModal({
                     >
                         <Sparkles className="h-4 w-4" />
                         <span>Gemini Master Prompt</span>
+                    </button>
+
+                    <button
+                        onClick={() => setActiveView('whats-new')}
+                        className={`px-4 py-2 text-xs font-semibold rounded-t-xl transition-all cursor-pointer flex items-center space-x-2 border-b-2 ${
+                            activeView === 'whats-new'
+                                ? 'border-amber-400 text-amber-300 bg-midnight-900/80'
+                                : 'border-transparent text-slate-400 hover:text-slate-200'
+                        }`}
+                    >
+                        <Zap className="h-4 w-4" />
+                        <span>What's New</span>
                     </button>
 
                     <button
@@ -491,6 +518,34 @@ export function ExportDappModal({
 
                             <pre className="p-4 rounded-2xl bg-midnight-950 font-mono text-[11px] text-slate-300 border border-white/10 leading-relaxed whitespace-pre-wrap max-h-96 overflow-y-auto">
                                 {masterPrompt}
+                            </pre>
+                        </div>
+                    ) : activeView === 'whats-new' ? (
+                        <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                                <span className="text-xs text-slate-300 font-medium">
+                                    New & updated circuits, parameter signatures, pruned view queries, and frontend migration guide:
+                                </span>
+                                <button
+                                    onClick={handleCopyWhatsNews}
+                                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-amber-600/30 text-amber-200 hover:bg-amber-600 hover:text-white text-xs font-semibold border border-amber-500/40 transition-all cursor-pointer"
+                                >
+                                    {isWhatsNewsCopied ? (
+                                        <>
+                                            <Check className="h-3.5 w-3.5 text-emerald-400" />
+                                            <span>What's New Copied!</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Copy className="h-3.5 w-3.5" />
+                                            <span>Copy What's New</span>
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+
+                            <pre className="p-4 rounded-2xl bg-midnight-950 font-mono text-[11px] text-slate-300 border border-white/10 leading-relaxed whitespace-pre-wrap max-h-96 overflow-y-auto">
+                                {whatsNews || 'Loading What\'s New analysis...'}
                             </pre>
                         </div>
                     ) : (
@@ -627,17 +682,31 @@ export function ExportDappModal({
                 {/* Footer Actions */}
                 <div className="flex items-center justify-between border-t border-white/10 px-6 py-4 bg-midnight-900/60">
                     <div className="flex items-center space-x-2">
-                        <button
-                            onClick={handleCopyPrompt}
-                            className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-midnight-800 text-slate-300 hover:text-white text-xs border border-white/10 hover:border-white/20 transition-all cursor-pointer"
-                        >
-                            {isCopied ? (
-                                <Check className="h-4 w-4 text-emerald-400" />
-                            ) : (
-                                <Copy className="h-4 w-4 text-slate-400" />
-                            )}
-                            <span>Copy Master Prompt</span>
-                        </button>
+                        {activeView === 'whats-new' ? (
+                            <button
+                                onClick={handleCopyWhatsNews}
+                                className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-midnight-800 text-amber-300 hover:text-white text-xs border border-amber-500/20 hover:border-amber-500/40 transition-all cursor-pointer"
+                            >
+                                {isWhatsNewsCopied ? (
+                                    <Check className="h-4 w-4 text-emerald-400" />
+                                ) : (
+                                    <Copy className="h-4 w-4 text-amber-400" />
+                                )}
+                                <span>Copy What's New</span>
+                            </button>
+                        ) : (
+                            <button
+                                onClick={handleCopyPrompt}
+                                className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-midnight-800 text-slate-300 hover:text-white text-xs border border-white/10 hover:border-white/20 transition-all cursor-pointer"
+                            >
+                                {isCopied ? (
+                                    <Check className="h-4 w-4 text-emerald-400" />
+                                ) : (
+                                    <Copy className="h-4 w-4 text-slate-400" />
+                                )}
+                                <span>Copy Master Prompt</span>
+                            </button>
+                        )}
                     </div>
 
                     <div className="flex items-center space-x-3">

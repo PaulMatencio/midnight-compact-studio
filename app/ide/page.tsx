@@ -156,6 +156,7 @@ export default function CompactIdePage() {
     const [pendingFileAction, setPendingFileAction] = useState<(() => void | Promise<void>) | null>(null);
     const [pendingTargetName, setPendingTargetName] = useState<string>('');
     const [isSavingBeforeLoad, setIsSavingBeforeLoad] = useState<boolean>(false);
+    const [isReloading, setIsReloading] = useState<boolean>(false);
 
     // Hydration mount state
     const [isMounted, setIsMounted] = useState<boolean>(false);
@@ -195,16 +196,38 @@ export default function CompactIdePage() {
             const savedDirty = localStorage.getItem('midnight_ide_is_dirty');
             const savedSplitWidth = localStorage.getItem('midnight_ide_split_width');
             const savedLastSaved = localStorage.getItem('midnight_ide_last_saved_code');
+            const targetActiveFile = localStorage.getItem('midnight_ide_active_filepath') || (savedFilename ? `contracts/${savedFilename}` : '');
 
             if (savedCode && savedFilename) {
                 setSourceCode(savedCode);
                 setFilename(savedFilename);
                 setSaveAsFilename(savedFilename);
+                if (targetActiveFile) setActiveFilePath(targetActiveFile);
                 lastSavedContentRef.current = savedLastSaved !== null ? savedLastSaved : savedCode;
                 const matched = COMPACT_TEMPLATES.find((t) => t.filename === savedFilename);
                 if (matched) setSelectedTemplate(matched);
                 if (editorRef.current) {
                     editorRef.current.setValue(savedCode);
+                }
+
+                // If not marked dirty, fetch the latest file from disk to ensure Monaco stays in sync with workspace
+                if (savedDirty !== 'true' && targetActiveFile) {
+                    fetch(`/api/workspace/files?file=${encodeURIComponent(targetActiveFile)}`)
+                        .then((res) => res.json())
+                        .then((data) => {
+                            if (data.success && data.data?.content !== undefined) {
+                                setSourceCode(data.data.content);
+                                lastSavedContentRef.current = data.data.content;
+                                try {
+                                    localStorage.setItem('midnight_ide_source_code', data.data.content);
+                                    localStorage.setItem('midnight_ide_last_saved_code', data.data.content);
+                                } catch { }
+                                if (editorRef.current) {
+                                    editorRef.current.setValue(data.data.content);
+                                }
+                            }
+                        })
+                        .catch(() => { });
                 }
             } else {
                 lastSavedContentRef.current = savedLastSaved !== null ? savedLastSaved : COMPACT_TEMPLATES[0].code;
@@ -724,9 +747,54 @@ import CompactStandardLibrary;
         }, relativePath);
     };
 
+    // Reload active file from disk discarding unsaved in-memory changes
+    const handleReloadActiveFileFromDisk = async () => {
+        const targetPath = activeFilePath || (filename ? `contracts/${filename}` : '');
+        if (!targetPath) return;
+
+        confirmIfUnsaved(async () => {
+            setIsReloading(true);
+            try {
+                const res = await fetch(`/api/workspace/files?file=${encodeURIComponent(targetPath)}`);
+                const data = await res.json();
+                if (data.success && data.data?.content !== undefined) {
+                    setActiveFilePath(data.data.path);
+                    setFilename(data.data.filename);
+                    setSaveAsFilename(data.data.filename);
+                    lastSavedContentRef.current = data.data.content;
+                    setSourceCode(data.data.content);
+                    setActiveLanguage(data.data.language || 'compact');
+                    setIsDirty(false);
+                    setCompilationResult(null);
+
+                    try {
+                        localStorage.setItem('midnight_ide_source_code', data.data.content);
+                        localStorage.setItem('midnight_ide_filename', data.data.filename);
+                        localStorage.setItem('midnight_ide_active_filepath', data.data.path);
+                        localStorage.setItem('midnight_ide_active_language', data.data.language || 'compact');
+                        localStorage.setItem('midnight_ide_is_dirty', 'false');
+                        localStorage.setItem('midnight_ide_last_saved_code', data.data.content);
+                    } catch { }
+
+                    if (editorRef.current) {
+                        editorRef.current.setValue(data.data.content);
+                    }
+
+                    updateEditorMarkers([]);
+                    toast.success('Reloaded from Disk', data.data.path);
+                } else {
+                    throw new Error(data.error || 'Failed to read file from disk');
+                }
+            } catch (err: any) {
+                toast.error('Reload Failed', err.message || 'Could not reload file');
+            } finally {
+                setIsReloading(false);
+            }
+        }, `Reload ${targetPath}`);
+    };
+
     // Load file from workspace explorer (contracts, sdk, examples, docs, scripts, modules, tests, utils)
     const handleSelectWorkspaceFile = async (node: WorkspaceFileNode) => {
-        if (activeFilePath === node.path) return;
         confirmIfUnsaved(async () => {
             try {
                 const res = await fetch(`/api/workspace/files?file=${encodeURIComponent(node.path)}`);
@@ -1243,6 +1311,17 @@ import CompactStandardLibrary;
                         <Save className="h-3.5 w-3.5 text-emerald-400" />
                         <span>{isSaving ? 'Saving...' : 'Save'}</span>
                         {isDirty && <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />}
+                    </button>
+
+                    {/* Reload from Disk Button */}
+                    <button
+                        onClick={handleReloadActiveFileFromDisk}
+                        disabled={isReloading}
+                        className="inline-flex items-center space-x-1.5 rounded-xl bg-midnight-900 px-3 py-2 text-xs font-semibold text-slate-300 border border-white/10 hover:bg-midnight-800 transition-colors cursor-pointer"
+                        title="Reload active file from workspace disk (discards unsaved editor buffer)"
+                    >
+                        <RefreshCw className={`h-3.5 w-3.5 text-amber-400 ${isReloading ? 'animate-spin' : ''}`} />
+                        <span>Reload</span>
                     </button>
 
                     {/* Save As Button */}

@@ -755,29 +755,50 @@ export class FungibleTokenV24Client<PS extends FungibleTokenV24PrivateState = Fu
   }
 
   // ==========================================================================
-  // Multi-Sig Inspection View Circuits
+  // Multi-Sig Ledger State Inspection Queries
   // ==========================================================================
 
-  public getMultisigNonce(context: CircuitContext<PS>): CircuitResults<PS, bigint> {
-    return this.contractInstance.circuits.getMultisigNonce(context);
+  /**
+   * Reads current multi-sig operation nonce directly from public ledger state.
+   */
+  public getMultisigNonce(ledgerState: FungibleTokenV24LedgerState | StateValue | ChargedState | unknown): bigint {
+    const state = (ledgerState as any)?._multisigNonce !== undefined
+      ? (ledgerState as FungibleTokenV24LedgerState)
+      : this.queryLedgerStateFromRaw(ledgerState);
+    return state._multisigNonce;
   }
 
-  public getMultisigThreshold(context: CircuitContext<PS>): CircuitResults<PS, bigint> {
-    return this.contractInstance.circuits.getMultisigThreshold(context);
+  /**
+   * Reads multi-sig signature threshold from public ledger state.
+   */
+  public getMultisigThreshold(ledgerState: FungibleTokenV24LedgerState | StateValue | ChargedState | unknown): bigint {
+    const state = (ledgerState as any)?._multisigThreshold !== undefined
+      ? (ledgerState as FungibleTokenV24LedgerState)
+      : this.queryLedgerStateFromRaw(ledgerState);
+    return state._multisigThreshold;
   }
 
-  public getMultisigSignerCount(context: CircuitContext<PS>): CircuitResults<PS, bigint> {
-    return this.contractInstance.circuits.getMultisigSignerCount(context);
+  /**
+   * Reads number of registered multi-sig signers from public ledger state.
+   */
+  public getMultisigSignerCount(ledgerState: FungibleTokenV24LedgerState | StateValue | ChargedState | unknown): bigint {
+    const state = (ledgerState as any)?._multisigSignerCount !== undefined
+      ? (ledgerState as FungibleTokenV24LedgerState)
+      : this.queryLedgerStateFromRaw(ledgerState);
+    return state._multisigSignerCount;
   }
 
+  /**
+   * Checks whether a signer commitment is registered in the multi-sig signers set from public ledger state.
+   */
   public isMultisigSigner(
-    context: CircuitContext<PS>,
+    ledgerState: FungibleTokenV24LedgerState | StateValue | ChargedState | unknown,
     commitment: Uint8Array | string
-  ): CircuitResults<PS, boolean> {
-    return this.contractInstance.circuits.isMultisigSigner(
-      context,
-      FungibleTokenV24Client.toBytes32(commitment)
-    );
+  ): boolean {
+    const state = (ledgerState as any)?._multisigSigners?.member !== undefined
+      ? (ledgerState as FungibleTokenV24LedgerState)
+      : this.queryLedgerStateFromRaw(ledgerState);
+    return state._multisigSigners.member(FungibleTokenV24Client.toBytes32(commitment));
   }
 }
 

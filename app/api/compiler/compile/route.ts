@@ -140,6 +140,8 @@ export async function POST(req: NextRequest) {
 
         // Locate compact compiler executable
         const possiblePaths = [
+            path.join(workspaceRoot, 'bin', 'compactc'),
+            path.join(workspaceRoot, 'bin', 'compact'),
             '/home/paul/.local/bin/compact',
             'compact',
             'compactc',
@@ -148,7 +150,7 @@ export async function POST(req: NextRequest) {
         let compilerBin = 'compact';
         for (const p of possiblePaths) {
             try {
-                if (p.startsWith('/')) {
+                if (p.startsWith('/') || p.startsWith('.')) {
                     await fs.access(p);
                     compilerBin = p;
                     break;
@@ -158,10 +160,12 @@ export async function POST(req: NextRequest) {
             }
         }
 
-        // Build command flags: flags must precede source and target directory paths
+        // Build command flags: compactc is direct binary (no subcommand); compact requires 'compile'
+        const isCompactC = compilerBin.endsWith('compactc') || compilerBin.endsWith('compactc.bin');
+        const subCmd = isCompactC ? '' : 'compile';
         const zkFlag = skipZk ? '--skip-zk' : '';
         const compactPathFlag = `--compact-path "${path.join(workspaceRoot, 'contracts')}:${modulesRoot}"`;
-        const compileCmd = `${compilerBin} compile ${zkFlag} ${compactPathFlag} "${sourceFilePath}" "${outDir}"`.replace(/\s+/g, ' ');
+        const compileCmd = `${compilerBin} ${subCmd} ${zkFlag} ${compactPathFlag} "${sourceFilePath}" "${outDir}"`.replace(/\s+/g, ' ');
 
         let stdout = '';
         let stderr = '';
@@ -175,7 +179,7 @@ export async function POST(req: NextRequest) {
                 timeout: timeoutMs,
                 env: {
                     ...process.env,
-                    PATH: `${process.env.PATH}:/home/paul/.local/bin:/usr/local/bin`,
+                    PATH: `${path.join(workspaceRoot, 'bin')}:${process.env.PATH}:/home/paul/.local/bin:/usr/local/bin`,
                 },
             });
             stdout = execResult.stdout || '';
