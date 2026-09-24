@@ -71,24 +71,26 @@ const _descriptor_11 = new __compactRuntime.CompactTypeVector(2, _descriptor_10)
 
 const _descriptor_12 = new __compactRuntime.CompactTypeUnsignedInteger(255n, 1);
 
+const _descriptor_13 = new __compactRuntime.CompactTypeUnsignedInteger(452312848583266388373324160190187140051835877600158453279131187530910662655n, 31);
+
 class _tuple_1 {
   alignment() {
-    return _descriptor_9.alignment().concat(_descriptor_9.alignment());
+    return _descriptor_9.alignment().concat(_descriptor_13.alignment());
   }
   fromValue(value_0) {
     return [
       _descriptor_9.fromValue(value_0),
-      _descriptor_9.fromValue(value_0)
+      _descriptor_13.fromValue(value_0)
     ]
   }
   toValue(value_0) {
-    return _descriptor_9.toValue(value_0[0]).concat(_descriptor_9.toValue(value_0[1]));
+    return _descriptor_9.toValue(value_0[0]).concat(_descriptor_13.toValue(value_0[1]));
   }
 }
 
-const _descriptor_13 = new _tuple_1();
+const _descriptor_14 = new _tuple_1();
 
-const _descriptor_14 = new __compactRuntime.CompactTypeVector(1, _descriptor_9);
+const _descriptor_15 = new __compactRuntime.CompactTypeVector(1, _descriptor_9);
 
 class _tuple_2 {
   alignment() {
@@ -106,9 +108,9 @@ class _tuple_2 {
   }
 }
 
-const _descriptor_15 = new _tuple_2();
+const _descriptor_16 = new _tuple_2();
 
-const _descriptor_16 = new __compactRuntime.CompactTypeVector(4, _descriptor_0);
+const _descriptor_17 = new __compactRuntime.CompactTypeVector(4, _descriptor_0);
 
 class _tuple_3 {
   alignment() {
@@ -125,11 +127,11 @@ class _tuple_3 {
   }
 }
 
-const _descriptor_17 = new _tuple_3();
+const _descriptor_18 = new _tuple_3();
 
 class _SchnorrHashInput_0 {
   alignment() {
-    return _descriptor_9.alignment().concat(_descriptor_9.alignment().concat(_descriptor_9.alignment().concat(_descriptor_9.alignment().concat(_descriptor_14.alignment()))));
+    return _descriptor_9.alignment().concat(_descriptor_9.alignment().concat(_descriptor_9.alignment().concat(_descriptor_9.alignment().concat(_descriptor_15.alignment()))));
   }
   fromValue(value_0) {
     return {
@@ -137,17 +139,17 @@ class _SchnorrHashInput_0 {
       ann_y: _descriptor_9.fromValue(value_0),
       pk_x: _descriptor_9.fromValue(value_0),
       pk_y: _descriptor_9.fromValue(value_0),
-      msg: _descriptor_14.fromValue(value_0)
+      msg: _descriptor_15.fromValue(value_0)
     }
   }
   toValue(value_0) {
-    return _descriptor_9.toValue(value_0.ann_x).concat(_descriptor_9.toValue(value_0.ann_y).concat(_descriptor_9.toValue(value_0.pk_x).concat(_descriptor_9.toValue(value_0.pk_y).concat(_descriptor_14.toValue(value_0.msg)))));
+    return _descriptor_9.toValue(value_0.ann_x).concat(_descriptor_9.toValue(value_0.ann_y).concat(_descriptor_9.toValue(value_0.pk_x).concat(_descriptor_9.toValue(value_0.pk_y).concat(_descriptor_15.toValue(value_0.msg)))));
   }
 }
 
-const _descriptor_18 = new _SchnorrHashInput_0();
+const _descriptor_19 = new _SchnorrHashInput_0();
 
-const _descriptor_19 = new __compactRuntime.CompactTypeVector(5, _descriptor_0);
+const _descriptor_20 = new __compactRuntime.CompactTypeVector(5, _descriptor_0);
 
 class _Either_0 {
   alignment() {
@@ -165,9 +167,9 @@ class _Either_0 {
   }
 }
 
-const _descriptor_20 = new _Either_0();
+const _descriptor_21 = new _Either_0();
 
-const _descriptor_21 = __compactRuntime.CompactTypeOpaqueString;
+const _descriptor_22 = __compactRuntime.CompactTypeOpaqueString;
 
 export class Contract {
   witnesses;
@@ -951,8 +953,8 @@ export class Contract {
                                                  value: __compactRuntime.StateValue.newCell({ value: _descriptor_12.toValue(4n),
                                                                                               alignment: _descriptor_12.alignment() }).encode() } },
                                        { push: { storage: true,
-                                                 value: __compactRuntime.StateValue.newCell({ value: _descriptor_21.toValue(''),
-                                                                                              alignment: _descriptor_21.alignment() }).encode() } },
+                                                 value: __compactRuntime.StateValue.newCell({ value: _descriptor_22.toValue(''),
+                                                                                              alignment: _descriptor_22.alignment() }).encode() } },
                                        { ins: { cached: false, n: 1 } }]);
     __compactRuntime.queryLedgerState(context,
                                       partialProofData,
@@ -961,8 +963,8 @@ export class Contract {
                                                  value: __compactRuntime.StateValue.newCell({ value: _descriptor_12.toValue(5n),
                                                                                               alignment: _descriptor_12.alignment() }).encode() } },
                                        { push: { storage: true,
-                                                 value: __compactRuntime.StateValue.newCell({ value: _descriptor_21.toValue(''),
-                                                                                              alignment: _descriptor_21.alignment() }).encode() } },
+                                                 value: __compactRuntime.StateValue.newCell({ value: _descriptor_22.toValue(''),
+                                                                                              alignment: _descriptor_22.alignment() }).encode() } },
                                        { ins: { cached: false, n: 1 } }]);
     __compactRuntime.queryLedgerState(context,
                                       partialProofData,
@@ -1083,8 +1085,8 @@ export class Contract {
                                                  value: __compactRuntime.StateValue.newCell({ value: _descriptor_12.toValue(4n),
                                                                                               alignment: _descriptor_12.alignment() }).encode() } },
                                        { push: { storage: true,
-                                                 value: __compactRuntime.StateValue.newCell({ value: _descriptor_21.toValue(name__0),
-                                                                                              alignment: _descriptor_21.alignment() }).encode() } },
+                                                 value: __compactRuntime.StateValue.newCell({ value: _descriptor_22.toValue(name__0),
+                                                                                              alignment: _descriptor_22.alignment() }).encode() } },
                                        { ins: { cached: false, n: 1 } }]);
     __compactRuntime.queryLedgerState(context,
                                       partialProofData,
@@ -1093,8 +1095,8 @@ export class Contract {
                                                  value: __compactRuntime.StateValue.newCell({ value: _descriptor_12.toValue(5n),
                                                                                               alignment: _descriptor_12.alignment() }).encode() } },
                                        { push: { storage: true,
-                                                 value: __compactRuntime.StateValue.newCell({ value: _descriptor_21.toValue(symbol__0),
-                                                                                              alignment: _descriptor_21.alignment() }).encode() } },
+                                                 value: __compactRuntime.StateValue.newCell({ value: _descriptor_22.toValue(symbol__0),
+                                                                                              alignment: _descriptor_22.alignment() }).encode() } },
                                        { ins: { cached: false, n: 1 } }]);
     __compactRuntime.queryLedgerState(context,
                                       partialProofData,
@@ -1238,23 +1240,23 @@ export class Contract {
     return result_0;
   }
   _transientHash_1(value_0) {
-    const result_0 = __compactRuntime.transientHash(_descriptor_18, value_0);
+    const result_0 = __compactRuntime.transientHash(_descriptor_19, value_0);
     return result_0;
   }
   _persistentHash_0(value_0) {
-    const result_0 = __compactRuntime.persistentHash(_descriptor_19, value_0);
+    const result_0 = __compactRuntime.persistentHash(_descriptor_20, value_0);
     return result_0;
   }
   _persistentHash_1(value_0) {
-    const result_0 = __compactRuntime.persistentHash(_descriptor_16, value_0);
-    return result_0;
-  }
-  _persistentHash_2(value_0) {
     const result_0 = __compactRuntime.persistentHash(_descriptor_17, value_0);
     return result_0;
   }
+  _persistentHash_2(value_0) {
+    const result_0 = __compactRuntime.persistentHash(_descriptor_18, value_0);
+    return result_0;
+  }
   _persistentHash_3(value_0) {
-    const result_0 = __compactRuntime.persistentHash(_descriptor_15, value_0);
+    const result_0 = __compactRuntime.persistentHash(_descriptor_16, value_0);
     return result_0;
   }
   _jubjubPointX_0(np_0) {
@@ -1282,16 +1284,16 @@ export class Contract {
     const [nextPrivateState_0, result_0] = this.witnesses.getSchnorrReduction(witnessContext_0,
                                                                               challengeHash_0);
     context.currentPrivateState = nextPrivateState_0;
-    if (!(Array.isArray(result_0) && result_0.length === 2  && typeof(result_0[0]) === 'bigint' && result_0[0] >= 0 && result_0[0] <= __compactRuntime.MAX_FIELD && typeof(result_0[1]) === 'bigint' && result_0[1] >= 0 && result_0[1] <= __compactRuntime.MAX_FIELD)) {
+    if (!(Array.isArray(result_0) && result_0.length === 2  && typeof(result_0[0]) === 'bigint' && result_0[0] >= 0 && result_0[0] <= __compactRuntime.MAX_FIELD && typeof(result_0[1]) === 'bigint' && result_0[1] >= 0n && result_0[1] <= 452312848583266388373324160190187140051835877600158453279131187530910662655n)) {
       __compactRuntime.typeError('getSchnorrReduction',
                                  'return value',
                                  'fungible-token-v2-4.compact line 23 char 1',
-                                 '[Field, Field]',
+                                 '[Field, Uint<0..452312848583266388373324160190187140051835877600158453279131187530910662656>]',
                                  result_0)
     }
     partialProofData.privateTranscriptOutputs.push({
-      value: _descriptor_13.toValue(result_0),
-      alignment: _descriptor_13.alignment()
+      value: _descriptor_14.toValue(result_0),
+      alignment: _descriptor_14.alignment()
     });
     return result_0;
   }
@@ -2493,7 +2495,7 @@ export function ledger(stateOrChargedState) {
                                                                                    result: undefined } }]).value);
     },
     get _name() {
-      return _descriptor_21.fromValue(__compactRuntime.queryLedgerState(context,
+      return _descriptor_22.fromValue(__compactRuntime.queryLedgerState(context,
                                                                         partialProofData,
                                                                         [
                                                                          { dup: { n: 0 } },
@@ -2507,7 +2509,7 @@ export function ledger(stateOrChargedState) {
                                                                                     result: undefined } }]).value);
     },
     get _symbol() {
-      return _descriptor_21.fromValue(__compactRuntime.queryLedgerState(context,
+      return _descriptor_22.fromValue(__compactRuntime.queryLedgerState(context,
                                                                         partialProofData,
                                                                         [
                                                                          { dup: { n: 0 } },

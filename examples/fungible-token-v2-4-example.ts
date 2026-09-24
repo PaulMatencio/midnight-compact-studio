@@ -7,8 +7,8 @@
 
 import {
   CompactRuntime,
-  type CircuitContext,
   type ConstructorContext,
+  type CircuitContext,
 } from '@midnight-ntwrk/compact-runtime';
 import {
   FungibleTokenV24Client,
@@ -16,93 +16,97 @@ import {
 } from '../src/client/fungible-token-v2-4-sdk.js';
 
 async function main() {
-  console.log('--- 1. Initializing Cryptographic Context & Secrets ---');
-  const contractSalt = new Uint8Array(32);
-  contractSalt.fill(0xaa);
+  console.log('--- Initializing FungibleTokenV24 Contract ---');
 
-  const ownerSK = new Uint8Array(32);
-  ownerSK.fill(0x01);
+  // 1. Mock context identifiers (32-byte hex strings in Midnight.js runtime)
+  const coinPublicKey = '01'.repeat(32);
+  const contractAddress = '00'.repeat(32);
 
-  const aliceSK = new Uint8Array(32);
-  aliceSK.fill(0x02);
+  // 2. Secret keys and salt
+  const ownerSk = new Uint8Array(32).fill(0xaa);
+  const aliceSk = new Uint8Array(32).fill(0xbb);
+  const contractSalt = new Uint8Array(32).fill(0x11);
 
-  const ownerAccount = FungibleTokenV24Client.deriveAccount(ownerSK, contractSalt);
-  const aliceAccount = FungibleTokenV24Client.deriveAccount(aliceSK, contractSalt);
+  // 3. Derive on-chain identities using persistentHash
+  const ownerAccount = FungibleTokenV24Client.deriveAccount(ownerSk, contractSalt);
+  const aliceAccount = FungibleTokenV24Client.deriveAccount(aliceSk, contractSalt);
 
   console.log('Owner Account Commitment:', Buffer.from(ownerAccount).toString('hex'));
   console.log('Alice Account Commitment:', Buffer.from(aliceAccount).toString('hex'));
 
-  // Multi-sig signer place-holders (3 initial registered signers)
-  const signer1 = new Uint8Array(32).fill(0x11);
-  const signer2 = new Uint8Array(32).fill(0x22);
-  const signer3 = new Uint8Array(32).fill(0x33);
+  // 4. Initial multi-sig signer commitments (mock)
+  const mockSigners = [
+    new Uint8Array(32).fill(0x01),
+    new Uint8Array(32).fill(0x02),
+    new Uint8Array(32).fill(0x03),
+  ];
 
-  console.log('\n--- 2. Instantiating SDK & Deploying Contract Initial State ---');
-  let currentOwnerPrivateState: FungibleTokenV24PrivateState = { secretKey: ownerSK };
-  const witnesses = FungibleTokenV24Client.createWitnesses(ownerSK);
-  const sdk = new FungibleTokenV24Client(witnesses, contractSalt);
+  // 5. Build constructor context and initialize state
+  let privateState: FungibleTokenV24PrivateState = { secretKey: ownerSk };
+  const constructorCtx = CompactRuntime.createConstructorContext(privateState, coinPublicKey);
 
-  // Addresses in Midnight.js runtime are 32-byte hex strings
-  const coinPublicKey = '01'.repeat(32);
-  const contractAddress = '00'.repeat(32);
+  const client = new FungibleTokenV24Client({
+    secretKey: ownerSk,
+    defaultContractSalt: contractSalt,
+    contractAddress,
+    coinPublicKey,
+  });
 
-  const constructorContext: ConstructorContext<FungibleTokenV24PrivateState> =
-    CompactRuntime.createConstructorContext(currentOwnerPrivateState, coinPublicKey);
-
-  const initResult = sdk.initialState(
-    constructorContext,
+  const initResult = client.initialState(
+    constructorCtx,
     contractSalt,
     ownerAccount,
-    'Shielded Token',
-    'SHIELD',
-    18n,
-    1_000_000n * 10n ** 18n,
-    [signer1, signer2, signer3],
-    2n
+    'Privacy Midnight Token',
+    'PMT',
+    8n,
+    1_000_000_00000000n, // Max supply
+    mockSigners,
+    2n // Threshold = 2
   );
 
   let currentChargedState = initResult.currentContractState.data;
-  currentOwnerPrivateState = initResult.currentPrivateState;
+  privateState = initResult.currentPrivateState;
 
-  let ledgerView = sdk.queryLedgerState(currentChargedState);
-  console.log('Contract Initialized:');
-  console.log('- Total Supply:', ledgerView._totalSupply);
-  console.log('- Multisig Threshold:', ledgerView._multisigThreshold);
-  console.log('- Multisig Signer Count:', ledgerView._multisigSignerCount);
-  console.log('- Is Paused:', ledgerView._paused);
+  // 6. Inspect initialized ledger state
+  let ledgerState = client.queryLedgerState(currentChargedState);
+  console.log('Token Name:', ledgerState._name);
+  console.log('Token Symbol:', ledgerState._symbol);
+  console.log('Total Supply:', ledgerState._totalSupply);
+  console.log('Threshold:', client.getMultisigThreshold(ledgerState));
 
-  console.log('\n--- 3. Direct State Execution: Pause Circuit ---');
-  let circuitContext: CircuitContext<FungibleTokenV24PrivateState> =
+  // 7. Demonstrate Pause Circuit Execution
+  console.log('\n--- Executing Pause Circuit ---');
+  let circuitCtx: CircuitContext<FungibleTokenV24PrivateState> =
     CompactRuntime.createCircuitContext(
       contractAddress,
       coinPublicKey,
       currentChargedState,
-      currentOwnerPrivateState
+      privateState
     );
 
-  const pauseResult = sdk.pause(circuitContext, ownerAccount);
+  const pauseResult = client.pause(circuitCtx, ownerAccount);
   currentChargedState = pauseResult.context.currentQueryContext.state;
-  currentOwnerPrivateState = pauseResult.context.currentPrivateState;
+  privateState = pauseResult.context.currentPrivateState;
 
-  ledgerView = sdk.queryLedgerState(currentChargedState);
-  console.log('State after pause(): _paused =', ledgerView._paused);
+  ledgerState = client.queryLedgerState(currentChargedState);
+  console.log('Is Paused after pause():', ledgerState._paused);
 
-  console.log('\n--- 4. Unpausing Contract ---');
-  circuitContext = CompactRuntime.createCircuitContext(
+  // 8. Demonstrate Unpause Circuit Execution
+  console.log('\n--- Executing Unpause Circuit ---');
+  circuitCtx = CompactRuntime.createCircuitContext(
     contractAddress,
     coinPublicKey,
     currentChargedState,
-    currentOwnerPrivateState
+    privateState
   );
 
-  const unpauseResult = sdk.unpause(circuitContext, ownerAccount);
+  const unpauseResult = client.unpause(circuitCtx, ownerAccount);
   currentChargedState = unpauseResult.context.currentQueryContext.state;
-  currentOwnerPrivateState = unpauseResult.context.currentPrivateState;
+  privateState = unpauseResult.context.currentPrivateState;
 
-  ledgerView = sdk.queryLedgerState(currentChargedState);
-  console.log('State after unpause(): _paused =', ledgerView._paused);
-
-  console.log('\n--- Quickstart Walkthrough Complete ---');
+  ledgerState = client.queryLedgerState(currentChargedState);
+  console.log('Is Paused after unpause():', ledgerState._paused);
+  console.log('\nContract executed successfully!');
 }
 
 main().catch((err) => {
