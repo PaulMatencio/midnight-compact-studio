@@ -32,6 +32,7 @@ import { WorkspaceFileNode } from '@/app/api/workspace/files/route';
 interface FileExplorerProps {
     activeFilePath?: string;
     onSelectFile: (file: WorkspaceFileNode) => void;
+    onDoubleClickFile?: (file: WorkspaceFileNode) => void;
     onFileCreated?: (file: WorkspaceFileNode) => void;
     onFileDeleted?: (path: string) => void;
     className?: string;
@@ -126,6 +127,7 @@ function getFileIcon(extension?: string) {
 export const FileExplorer: React.FC<FileExplorerProps> = ({
     activeFilePath,
     onSelectFile,
+    onDoubleClickFile,
     onFileCreated,
     onFileDeleted,
     className = '',
@@ -340,14 +342,18 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
                 <div key={node.path} className="select-none">
                     <div
                         onClick={() => toggleFolder(node.path)}
-                        className={`group flex items-center justify-between px-2 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
+                        onDoubleClick={(e) => {
+                            e.stopPropagation();
+                            toggleFolder(node.path);
+                        }}
+                        className={`group flex items-center justify-between px-2 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors select-none ${
                             isTopLevel
                                 ? 'hover:bg-white/5 text-slate-200 mt-1'
                                 : 'hover:bg-white/5 text-slate-300 ml-2'
                         }`}
                         style={{ paddingLeft: `${Math.max(8, level * 14)}px` }}
                     >
-                        <div className="flex items-center space-x-1.5 min-w-0 flex-1">
+                        <div className="flex items-center space-x-1.5 min-w-0 flex-1 pointer-events-none">
                             {isExpanded ? (
                                 <ChevronDown className="h-3 w-3 text-slate-400 flex-shrink-0" />
                             ) : (
@@ -361,7 +367,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
                             <span className="truncate font-mono tracking-tight">{node.name}</span>
                         </div>
 
-                        <span className="text-[10px] text-slate-400 font-mono px-1.5 py-0.2 rounded-full bg-white/5">
+                        <span className="text-[10px] text-slate-400 font-mono px-1.5 py-0.2 rounded-full bg-white/5 pointer-events-none">
                             {fileCount}
                         </span>
                     </div>
@@ -380,7 +386,11 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
             <div
                 key={node.path}
                 onClick={() => onSelectFile(node)}
-                className={`group flex items-center justify-between px-2 py-1.5 rounded-lg text-xs cursor-pointer transition-all ${
+                onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    (onDoubleClickFile || onSelectFile)(node);
+                }}
+                className={`group flex items-center justify-between px-2 py-1.5 rounded-lg text-xs cursor-pointer transition-all select-none ${
                     isActive
                         ? 'bg-indigo-600/30 text-white font-semibold border border-indigo-500/40 shadow-sm'
                         : 'text-slate-300 hover:bg-white/5 hover:text-white border border-transparent'
@@ -388,7 +398,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
                 style={{ paddingLeft: `${Math.max(12, level * 14)}px` }}
                 title={`${node.path} (${formatBytes(node.sizeBytes)})`}
             >
-                <div className="flex items-center space-x-2 min-w-0 flex-1">
+                <div className="flex items-center space-x-2 min-w-0 flex-1 pointer-events-none">
                     {getFileIcon(node.extension)}
                     <span className="truncate font-mono text-[12px]">{node.name}</span>
                 </div>

@@ -151,7 +151,7 @@ circuit assertApprovals2(
     const comm = calculateSignerCommitment(pk, _contractSalt);
     assert(_multisigSigners.member(disclose(comm)), "FungibleToken: signer not registered");
 
-    const msgVec: Vector<1, Field> = [msgHash as Field];
+    const msgVec: Vector<1, Field> = [transientHash<Bytes<32>>(msgHash)];
     schnorrVerify<1>(msgVec, signatures[i], pk);
   }
 }

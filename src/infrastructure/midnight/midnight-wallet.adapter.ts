@@ -214,7 +214,7 @@ export class MidnightWalletAdapter implements IWalletGateway {
         this.walletCache.delete(trimmedSeed);
     }
 
-    async clearStoredState(seed: string): Promise<void> {
+    async clearStoredState(seed: string, target: 'all' | 'dust' = 'all'): Promise<void> {
         const trimmedSeed = seed.trim();
         this.evictWallet(trimmedSeed);
         try {
@@ -222,7 +222,22 @@ export class MidnightWalletAdapter implements IWalletGateway {
             const networkId = getNetworkId();
             const unshieldedKeystore = createKeystore(keys[Roles.NightExternal], networkId);
             const bech32Address = unshieldedKeystore.getBech32Address().toString();
-            await this.walletStateStorage.clearState(bech32Address);
+
+            if (target === 'dust') {
+                const existing = await this.walletStateStorage.loadState(bech32Address);
+                if (existing) {
+                    await this.walletStateStorage.saveState(bech32Address, {
+                        shielded: existing.shielded,
+                        dust: undefined,
+                        updatedAt: new Date().toISOString(),
+                    });
+                    console.log(`[MidnightWalletAdapter] Cleared DUST cached checkpoint for ${bech32Address}. Retained shielded checkpoint.`);
+                }
+            } else {
+                await this.walletStateStorage.clearState(bech32Address);
+                console.log(`[MidnightWalletAdapter] Cleared all cached checkpoints for ${bech32Address}.`);
+            }
+
             if (fs.existsSync(this.cacheFilePath)) {
                 try {
                     fs.unlinkSync(this.cacheFilePath);

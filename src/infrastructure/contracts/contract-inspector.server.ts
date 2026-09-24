@@ -138,7 +138,7 @@ function splitTopLevelCommas(str: string): string[] {
         const placeholder = isSaltParam
             ? 'Leave empty for auto-generated cryptographic salt (or 32-byte hex)'
             : isVectorParam
-            ? 'Comma-separated 32-byte hex signer commitments (or leave empty for auto-generated signers)'
+            ? 'Comma-separated 3 raw Lace wallet addresses (mn_addr_preprod1...) or 32-byte hex signers'
             : type === 'address'
             ? '32-byte hex or leave empty for deployer key'
             : type === 'number'
@@ -157,7 +157,7 @@ function splitTopLevelCommas(str: string): string[] {
             description: compactType,
             placeholder,
             defaultValue,
-            required: !isSaltParam && !isVectorParam && type !== 'boolean' && !compactType.startsWith('Maybe'),
+            required: !isSaltParam && type !== 'boolean' && !compactType.startsWith('Maybe'),
         });
     }
 

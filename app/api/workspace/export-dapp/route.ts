@@ -594,7 +594,7 @@ You must organize the codebase strictly across Clean Architecture layers:
 
 ### D. Presentation Layer (\`src/presentation/\`)
 - **Contexts** (\`src/presentation/context/\`):
-  - \`WalletContext.tsx\`: React context exposing wallet connection, address, balance, and network.
+  - \`WalletContext.tsx\`: React context exposing wallet connection, address, balance, and network with Stop-on-Lock protection and unhandled channel shutdown prevention.
   - \`ContractContext.tsx\`: React context providing reactive access to contract state and use cases.
 - **Hooks** (\`src/presentation/hooks/\`):
   - \`use${pascalName}.ts\`: Exposes circuit methods, reactive state streams, and transaction progress.
@@ -604,7 +604,50 @@ You must organize the codebase strictly across Clean Architecture layers:
 
 ---
 
-## 🎨 2. UI/UX Requirements: Side Panel & Dashboard
+## 🛡️ 2. Resilient Lace Wallet Extension Integration Patterns (CRITICAL)
+
+Lace operates as a Chrome **Manifest V3** extension with a single IPC service worker port. When implementing \`wallet.adapter.ts\` and \`WalletContext.tsx\`, you **MUST** strictly implement these 5 resilience patterns to prevent authorization hangs, deadlocks, channel crashes, and repeated unlock password popups:
+
+### A. The "Stop-on-Lock" Pattern (Zero Inactivity Password Loops)
+- **Root Cause**: Querying \`api.getUnshieldedBalances()\` or \`api.getShieldedAddresses()\` on a locked Lace wallet forces Chrome/Lace to spawn an intrusive OS/extension modal ("Enter password to unlock your wallet"). If a polling timer runs every 3–15 seconds while locked, Lace continuously pops up unlock modals every minute!
+- **Mandatory Implementation**:
+  1. Detect locked keystore errors (e.g. error message matches \`"locked"\`, \`"decrypt"\`, or \`"keystore"\`).
+  2. Maintain an \`isWalletLockedRef\` inside \`WalletContext\`. When locked, **immediately halt and disarm all background polling intervals and tab focus sync listeners**.
+  3. Show a clear UI banner: *"Your Lace wallet is locked. Please unlock it via the browser toolbar icon."*
+  4. Resume polling ONLY after the user explicitly unlocks the wallet or triggers a reconnection.
+
+### B. Single-Flight Request Deduplication (Mutex Promise Locks)
+- **Root Cause**: React component re-renders or simultaneous connection triggers fire concurrent \`connect()\` or balance queries over Lace's single IPC message channel, causing message collisions and permanent authorization window hangs.
+- **Mandatory Implementation**:
+  - Implement module-level single-flight promise locks: \`activeConnectPromise\` and \`activeFetchBalancesPromise\`.
+  - If a connection handshake or balance query is already in flight, reuse the active promise rather than opening a duplicate IPC channel.
+
+### C. 800ms Settling Delay & Sequential RPC Queries
+- **Root Cause**: Calling \`Promise.allSettled([getUnshieldedBalances(), getDustBalance(), getShieldedBalances()])\` concurrently immediately after \`connect()\` returns crashes Lace's internal \`activity-channel\` and \`redux-store\` before the extension modal has closed.
+- **Mandatory Implementation**:
+  1. Add an **800ms settling delay** immediately after \`connect(networkId)\` resolves before querying any properties.
+  2. Query balance and address methods **sequentially** (one-by-one with timeouts):
+     - \`getUnshieldedAddress()\` $\\to$
+     - \`getUnshieldedBalances()\` (if locked $\\to$ **fast-bailout immediately** without running remaining queries) $\\to$
+     - \`getDustBalance()\` $\\to$
+     - \`getShieldedAddresses()\`.
+
+### D. Tab Visibility Guard & Relaxed Polling Intervals
+- **Root Cause**: Aggressive polling loops (e.g. 3s–15s) bombard sleeping Manifest V3 background workers when the user is in another tab.
+- **Mandatory Implementation**:
+  - Check \`document.visibilityState === 'visible'\` before every poll; skip completely when hidden.
+  - Set the background polling interval to **30–60 seconds** for the Lace extension (never lower than 30s).
+  - Throttle window \`focus\` and \`visibilitychange\` listeners to at most once per **20 seconds**.
+
+### E. Window-Level Channel Shutdown Interceptor (\`unhandledrejection\`)
+- **Root Cause**: When Chrome puts idle extension service workers to sleep, in-flight IPC proxies disconnect, throwing \`Remote API with channel 'activity-channel' was shutdown: object can no longer be used\`.
+- **Mandatory Implementation**:
+  - Register a window \`unhandledrejection\` listener in \`WalletProvider\`.
+  - If the rejection reason contains \`activity-channel\`, \`redux-store\`, or \`channel was shutdown\`, call \`event.preventDefault()\` to suppress the red browser console error, invalidate the dead API handle (\`extensionApiRef.current = null\`), and update UI state cleanly.
+
+---
+
+## 🎨 3. UI/UX Requirements: Side Panel & Dashboard
 
 ### A. Navigation Side Panel (Sidebar)
 - **Positioning & Layout**: Persistent left sidebar on desktop (collapsible / expandable) with a mobile slide-over drawer toggle.
@@ -631,7 +674,7 @@ You must organize the codebase strictly across Clean Architecture layers:
 
 ---
 
-## 🌐 3. Network & Deployment Configuration
+## 🌐 4. Network & Deployment Configuration
 Use the configuration specified in \`deployment.config.json\` or \`deployment.json\` (configured via \`infrastructure/config/midnight-config.ts\`):
 - **Contract Name**: ${baseContractName}
 - **Contract Address**: ${config.contractAddress || DEFAULT_DEPLOYMENT_CONFIG.contractAddress}
@@ -653,6 +696,7 @@ ${saltSection}${ownerSection}${deployerSection}- **Network ID**: ${config.networ
 3. **Scaffold Clean Architecture**: Generate all required application source files following the Clean Architecture layout (\`domain/\`, \`application/\`, \`infrastructure/\`, \`presentation/\`), referencing \`.agents/plugins/midnight-dapp-dev/skills/core/templates/\` for file structures and boilerplate.
 4. **Implement UI**: Build the persistent **Side Panel** navigation and comprehensive **Dashboard** page with real-time ZK proof and transaction progress steppers.
 5. **Ensure Midnight Standards**: Ensure all types, imports, wallet connections via \`window.midnight\`, and provider configurations align with the \`midnight-dapp-dev\` skills and Midnight Network specification.
+6. **Implement Resilient Lace Wallet Integration**: Ensure \`WalletContext\` and \`wallet.adapter.ts\` strictly implement the Stop-on-Lock pattern, single-flight request deduplication, 800ms settling delay, sequential balance queries, visibility-guarded 30-60s polling, and the window-level \`unhandledrejection\` channel shutdown interceptor to prevent Lace from hanging or popping up password prompts.
 `;
 }
 

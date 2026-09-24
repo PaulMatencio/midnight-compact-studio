@@ -22,6 +22,7 @@ import { GetBulletinBoardStateUseCase } from '@/src/application/use-cases/get-bu
 import { ResetBulletinBoardStateUseCase } from '@/src/application/use-cases/reset-bulletin-board-state.usecase';
 import { RunBulletinBoardShowcaseUseCase } from '@/src/application/use-cases/run-bulletin-board-showcase.usecase';
 import { ExecuteBulletinBoardCircuitUseCase } from '@/src/application/use-cases/execute-bulletin-board-circuit.usecase';
+import { ResetWalletSyncUseCase } from '@/src/application/use-cases/reset-wallet-sync.usecase';
 
 const storage = createStorageServices();
 
@@ -45,6 +46,7 @@ class Container {
     public readonly deployContractUseCase = new DeployContractUseCase(this.contractGateway);
     public readonly getContractStateUseCase = new GetContractStateUseCase(this.contractGateway);
     public readonly sendUnshieldedTNightUseCase = new SendUnshieldedTNightUseCase(this.walletGateway);
+    public readonly resetWalletSyncUseCase = new ResetWalletSyncUseCase(this.walletGateway);
     public readonly getSystemHealthUseCase = new GetSystemHealthUseCase(this.systemGateway);
     public readonly deriveKeysUseCase = new DeriveKeysUseCase(this.walletGateway);
 

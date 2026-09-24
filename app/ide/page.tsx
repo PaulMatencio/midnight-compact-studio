@@ -795,6 +795,9 @@ import CompactStandardLibrary;
 
     // Load file from workspace explorer (contracts, sdk, examples, docs, scripts, modules, tests, utils)
     const handleSelectWorkspaceFile = async (node: WorkspaceFileNode) => {
+        if (activeFilePath === node.path && !isDirty) {
+            return;
+        }
         confirmIfUnsaved(async () => {
             try {
                 const res = await fetch(`/api/workspace/files?file=${encodeURIComponent(node.path)}`);
@@ -1582,6 +1585,7 @@ import CompactStandardLibrary;
                                 <FileExplorer
                                     activeFilePath={activeFilePath || (filename ? `contracts/${filename}` : undefined)}
                                     onSelectFile={handleSelectWorkspaceFile}
+                                    onDoubleClickFile={handleSelectWorkspaceFile}
                                     onFileCreated={(newNode) => {
                                         toast.success('File Created', newNode.path);
                                     }}

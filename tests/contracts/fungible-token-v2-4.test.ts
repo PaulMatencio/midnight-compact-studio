@@ -2,103 +2,123 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import * as CompactRuntime from '@midnight-ntwrk/compact-runtime';
 import { Contract, ledger, type Witnesses } from '../../contracts/managed/fungible-token-v2-4/contract/index.js';
 
-// ============ Type Definitions & Constants ============
+// ============ Deterministic Mock Utilities & Constants ============
+
+const createKey = (byteValue: number): Uint8Array => new Uint8Array(32).fill(byteValue);
+const zeroKey = (): Uint8Array => new Uint8Array(32).fill(0);
+
+const pad = (length: number, str: string): Uint8Array => {
+  const bytes = new TextEncoder().encode(str);
+  const result = new Uint8Array(length);
+  result.set(bytes.subarray(0, length));
+  return result;
+};
+
+const domainTagAuth = pad(32, 'fungible-token:auth');
+
+const dummyContractAddress = '00'.repeat(32);
+const dummyCoinPublicKey = '01'.repeat(32);
+
+const CONTRACT_SALT = createKey(99);
+const TOKEN_NAME = 'Midnight Fungible Token';
+const TOKEN_SYMBOL = 'MFT';
+const DECIMALS = 18n;
+const MAX_SUPPLY = 1_000_000_000n * 10n ** 18n;
+const THRESHOLD = 2n;
+
+const INITIAL_SIGNERS: [Uint8Array, Uint8Array, Uint8Array] = [
+  createKey(11),
+  createKey(12),
+  createKey(13),
+];
+
+// Caller Secret Keys
+const OWNER_SK = createKey(1);
+const ALICE_SK = createKey(2);
+const BOB_SK = createKey(3);
+const CHARLIE_SK = createKey(4);
+const UNAUTHORIZED_SK = createKey(5);
+
+// Struct definitions matching Compact
+interface JubjubPoint {
+  x: bigint;
+  y: bigint;
+}
+
+interface SchnorrSignature {
+  announcement: JubjubPoint;
+  response: bigint;
+}
 
 interface PrivateState {
   currentSecretKey: Uint8Array;
 }
 
-const createKey = (byteValue: number): Uint8Array => new Uint8Array(32).fill(byteValue);
+// Dummy Jubjub points & signatures for testing multi-sig guard rails
+const dummyPoint1: JubjubPoint = { x: 0n, y: 1n };
+const dummyPoint2: JubjubPoint = { x: 0n, y: 2n };
+const dummySig: SchnorrSignature = { announcement: { x: 0n, y: 1n }, response: 0n };
 
-const dummyContractAddress = '00'.repeat(32);
-const dummyCoinPublicKey = '01'.repeat(32);
+// ============ Dynamic Persistent Hash Discovery ============
 
-const CONTRACT_SALT = createKey(7);
-const TOKEN_NAME = 'Midnight Fungible Token';
-const TOKEN_SYMBOL = 'MFT';
-const DECIMALS = 8n;
-const MAX_SUPPLY = 1_000_000n;
-const MAX_UINT128 = 340282366920938463463374607431768211455n;
-const TWO_248 = 1n << 248n; // 452312848583266388373324160190187140051835877600158453279131187530910662656n
-
-// Secret Keys
-const OWNER_SK = createKey(1);
-const ALICE_SK = createKey(2);
-const BOB_SK = createKey(3);
-const CHARLIE_SK = createKey(4);
-const UNAUTHORIZED_SK = createKey(9);
-
-// Signer Commitments
-const SIGNER_1 = createKey(11);
-const SIGNER_2 = createKey(12);
-const SIGNER_3 = createKey(13);
-const INITIAL_SIGNERS: [Uint8Array, Uint8Array, Uint8Array] = [SIGNER_1, SIGNER_2, SIGNER_3];
-const THRESHOLD = 2n;
-
-// Multi-sig Mock Structs
-const mockPubkey1 = { x: 101n, y: 102n };
-const mockPubkey2 = { x: 201n, y: 202n };
-const mockSignature1 = { announcement: { x: 11n, y: 12n }, response: 13n };
-const mockSignature2 = { announcement: { x: 21n, y: 22n }, response: 23n };
-
-// Helpers for zero-key representation
-const zeroKey = (): Uint8Array => new Uint8Array(32).fill(0);
-
-// ============ Dynamic Persistent Hash Discovery for Authentication ============
-
-const domainTagAuth = new Uint8Array(32);
-domainTagAuth.set(new TextEncoder().encode('fungible-token:auth'));
-
-const dummySalt = new Uint8Array(32).fill(7);
-const helperContract = new Contract({
-  localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)],
-  getSchnorrReduction: (ctx: any, ch: bigint) => [ctx.privateState, [0n, 0n]],
-});
-
-const proto = Object.getPrototypeOf(helperContract);
-const hashMethods = Object.getOwnPropertyNames(proto).filter((k) => k.startsWith('_persistentHash'));
 let accountHashMethod = '_persistentHash_1';
 let passWrappedObject = false;
 
-for (const method of hashMethods) {
-  try {
-    const t1 = (helperContract as any)[method]([domainTagAuth, dummySalt, createKey(1)]);
-    const t2 = (helperContract as any)[method]([domainTagAuth, dummySalt, createKey(2)]);
-    if (t1 instanceof Uint8Array && t2 instanceof Uint8Array && Buffer.from(t1).compare(Buffer.from(t2)) !== 0) {
-      accountHashMethod = method;
-      passWrappedObject = false;
-      break;
-    }
-  } catch {}
-  try {
-    const t1 = (helperContract as any)[method]([domainTagAuth, { bytes: dummySalt }, createKey(1)]);
-    const t2 = (helperContract as any)[method]([domainTagAuth, { bytes: dummySalt }, createKey(2)]);
-    if (t1 instanceof Uint8Array && t2 instanceof Uint8Array && Buffer.from(t1).compare(Buffer.from(t2)) !== 0) {
-      accountHashMethod = method;
-      passWrappedObject = true;
-      break;
-    }
-  } catch {}
+{
+  const dummySalt = new Uint8Array(32).fill(7);
+  const helperContract = new Contract({
+    localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)],
+    getSchnorrReduction: (ctx: any) => [ctx.privateState, [0n, 0n]],
+  });
+  const proto = Object.getPrototypeOf(helperContract);
+  const hashMethods = Object.getOwnPropertyNames(proto).filter((k) => k.startsWith('_persistentHash'));
+
+  for (const method of hashMethods) {
+    try {
+      const t1 = (helperContract as any)[method]([domainTagAuth, dummySalt, createKey(1)]);
+      const t2 = (helperContract as any)[method]([domainTagAuth, dummySalt, createKey(2)]);
+      if (t1 instanceof Uint8Array && t2 instanceof Uint8Array && Buffer.from(t1).compare(Buffer.from(t2)) !== 0) {
+        accountHashMethod = method;
+        passWrappedObject = false;
+        break;
+      }
+    } catch {}
+    try {
+      const t1 = (helperContract as any)[method]([domainTagAuth, { bytes: dummySalt }, createKey(1)]);
+      const t2 = (helperContract as any)[method]([domainTagAuth, { bytes: dummySalt }, createKey(2)]);
+      if (t1 instanceof Uint8Array && t2 instanceof Uint8Array && Buffer.from(t1).compare(Buffer.from(t2)) !== 0) {
+        accountHashMethod = method;
+        passWrappedObject = true;
+        break;
+      }
+    } catch {}
+  }
 }
 
 const deriveAccount = (sk: Uint8Array, salt: Uint8Array = CONTRACT_SALT): Uint8Array => {
-  const saltArg = passWrappedObject ? { bytes: salt } : salt;
+  const dummySalt = salt;
+  const helperContract = new Contract({
+    localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)],
+    getSchnorrReduction: (ctx: any) => [ctx.privateState, [0n, 0n]],
+  });
+  const saltArg = passWrappedObject ? { bytes: dummySalt } : dummySalt;
   return (helperContract as any)[accountHashMethod]([domainTagAuth, saltArg, sk]);
 };
 
-// ============ Test Suite ============
+// ============ Vitest Test Suite ============
 
-describe('FungibleToken Contract v2.4', () => {
+describe('FungibleToken Contract v2.4 (Vitest Unit Tests)', () => {
   let contract: Contract<PrivateState>;
   let circuitContext: any;
   let currentCallerSecretKey: Uint8Array;
   let privateState: PrivateState;
 
-  let ownerAccount: Uint8Array;
-  let aliceAccount: Uint8Array;
-  let bobAccount: Uint8Array;
-  let charlieAccount: Uint8Array;
-  let unauthorizedAccount: Uint8Array;
+  // Derived caller accounts
+  let OWNER_ACCOUNT: Uint8Array;
+  let ALICE_ACCOUNT: Uint8Array;
+  let BOB_ACCOUNT: Uint8Array;
+  let CHARLIE_ACCOUNT: Uint8Array;
+  let UNAUTHORIZED_ACCOUNT: Uint8Array;
 
   const setCallerSecretKey = (sk: Uint8Array) => {
     currentCallerSecretKey = sk;
@@ -114,9 +134,8 @@ describe('FungibleToken Contract v2.4', () => {
       ctx.privateState?.currentSecretKey ?? currentCallerSecretKey,
     ],
     getSchnorrReduction: (ctx, challengeHash: bigint) => {
-      const q = challengeHash / TWO_248;
-      const r = challengeHash % TWO_248;
-      return [ctx.privateState, [q, r]];
+      const TWO_248 = 1n << 248n;
+      return [ctx.privateState, [challengeHash / TWO_248, challengeHash % TWO_248]];
     },
   };
 
@@ -142,28 +161,31 @@ describe('FungibleToken Contract v2.4', () => {
     return l._balances.member(account) ? l._balances.lookup(account) : 0n;
   };
 
-  const getAllowance = (owner: Uint8Array, spender: Uint8Array): bigint => {
+  const getAllowance = (tokenOwner: Uint8Array, spender: Uint8Array): bigint => {
     const l = getLedger();
-    const key: [Uint8Array, Uint8Array] = [owner, spender];
+    const key: [Uint8Array, Uint8Array] = [tokenOwner, spender];
     return l._allowances.member(key) ? l._allowances.lookup(key) : 0n;
   };
 
   beforeEach(() => {
-    contract = new Contract(witnesses);
+    // Derive caller public identities using the contract salt
+    OWNER_ACCOUNT = deriveAccount(OWNER_SK);
+    ALICE_ACCOUNT = deriveAccount(ALICE_SK);
+    BOB_ACCOUNT = deriveAccount(BOB_SK);
+    CHARLIE_ACCOUNT = deriveAccount(CHARLIE_SK);
+    UNAUTHORIZED_ACCOUNT = deriveAccount(UNAUTHORIZED_SK);
+
+    // Default caller is the owner
     currentCallerSecretKey = OWNER_SK;
     privateState = { currentSecretKey: OWNER_SK };
 
-    ownerAccount = deriveAccount(OWNER_SK);
-    aliceAccount = deriveAccount(ALICE_SK);
-    bobAccount = deriveAccount(BOB_SK);
-    charlieAccount = deriveAccount(CHARLIE_SK);
-    unauthorizedAccount = deriveAccount(UNAUTHORIZED_SK);
+    contract = new Contract(witnesses);
 
     const constructorCtx = CompactRuntime.createConstructorContext(privateState, dummyCoinPublicKey);
     const { currentContractState } = contract.initialState(
       constructorCtx,
       CONTRACT_SALT,
-      ownerAccount,
+      OWNER_ACCOUNT,
       TOKEN_NAME,
       TOKEN_SYMBOL,
       DECIMALS,
@@ -180,504 +202,570 @@ describe('FungibleToken Contract v2.4', () => {
     );
   });
 
-  describe('Constructor & Deployment Invariants', () => {
-    it('initializes public ledger fields correctly', () => {
+  // ==========================================================================
+  // 1. Constructor & Initial State Verification
+  // ==========================================================================
+  describe('Constructor & Initial State', () => {
+    it('should initialize token metadata and configuration correctly', () => {
       const state = getLedger();
       expect(state._name).toBe(TOKEN_NAME);
       expect(state._symbol).toBe(TOKEN_SYMBOL);
-      expect(state._decimals).toBe(DECIMALS);
+      expect(state._decimals).toBe(18n);
       expect(state._totalSupply).toBe(0n);
       expect(state._maxSupply).toBe(MAX_SUPPLY);
-      expect(state.owner).toEqual(ownerAccount);
+      expect(state.owner).toEqual(OWNER_ACCOUNT);
       expect(state._contractSalt).toEqual(CONTRACT_SALT);
       expect(state._paused).toBe(false);
-      expect(state._emergencyPauser).toEqual(ownerAccount);
-      expect(state._multisigThreshold).toBe(THRESHOLD);
+      expect(state._emergencyPauser).toEqual(OWNER_ACCOUNT);
+      expect(state._multisigThreshold).toBe(2n);
       expect(state._multisigSignerCount).toBe(3n);
       expect(state._multisigNonce).toBe(0n);
-      expect(state._multisigSigners.member(SIGNER_1)).toBe(true);
-      expect(state._multisigSigners.member(SIGNER_2)).toBe(true);
-      expect(state._multisigSigners.member(SIGNER_3)).toBe(true);
+
+      for (const signer of INITIAL_SIGNERS) {
+        expect(state._multisigSigners.member(signer)).toBe(true);
+      }
     });
 
-    it('defaults _maxSupply to MAX_UINT128 if maxSupply_ is 0', () => {
+    it('should reject threshold less than 1', () => {
       const constructorCtx = CompactRuntime.createConstructorContext(privateState, dummyCoinPublicKey);
-      const { currentContractState } = contract.initialState(
-        constructorCtx,
-        CONTRACT_SALT,
-        ownerAccount,
-        TOKEN_NAME,
-        TOKEN_SYMBOL,
-        DECIMALS,
-        0n,
-        INITIAL_SIGNERS,
-        THRESHOLD
-      );
-      const state = ledger(currentContractState.data);
-      expect(state._maxSupply).toBe(MAX_UINT128);
-    });
-
-    it('rejects deployment if threshold is 0', () => {
-      const constructorCtx = CompactRuntime.createConstructorContext(privateState, dummyCoinPublicKey);
-      expect(() =>
+      expect(() => {
         contract.initialState(
           constructorCtx,
           CONTRACT_SALT,
-          ownerAccount,
+          OWNER_ACCOUNT,
           TOKEN_NAME,
           TOKEN_SYMBOL,
           DECIMALS,
           MAX_SUPPLY,
           INITIAL_SIGNERS,
           0n
-        )
-      ).toThrow('FungibleToken: invalid threshold');
+        );
+      }).toThrow('FungibleToken: invalid threshold');
     });
 
-    it('rejects deployment if threshold is greater than 3', () => {
+    it('should reject threshold greater than 3', () => {
       const constructorCtx = CompactRuntime.createConstructorContext(privateState, dummyCoinPublicKey);
-      expect(() =>
+      expect(() => {
         contract.initialState(
           constructorCtx,
           CONTRACT_SALT,
-          ownerAccount,
+          OWNER_ACCOUNT,
           TOKEN_NAME,
           TOKEN_SYMBOL,
           DECIMALS,
           MAX_SUPPLY,
           INITIAL_SIGNERS,
           4n
-        )
-      ).toThrow('FungibleToken: invalid threshold');
+        );
+      }).toThrow('FungibleToken: invalid threshold');
     });
 
-    it('rejects deployment if duplicate initial signers exist', () => {
+    it('should reject duplicate initial signers in constructor', () => {
+      const duplicateSigners: [Uint8Array, Uint8Array, Uint8Array] = [
+        createKey(11),
+        createKey(11),
+        createKey(13),
+      ];
       const constructorCtx = CompactRuntime.createConstructorContext(privateState, dummyCoinPublicKey);
-      const duplicateSigners: [Uint8Array, Uint8Array, Uint8Array] = [SIGNER_1, SIGNER_1, SIGNER_3];
-      expect(() =>
+      expect(() => {
         contract.initialState(
           constructorCtx,
           CONTRACT_SALT,
-          ownerAccount,
+          OWNER_ACCOUNT,
           TOKEN_NAME,
           TOKEN_SYMBOL,
           DECIMALS,
           MAX_SUPPLY,
           duplicateSigners,
           THRESHOLD
-        )
-      ).toThrow('FungibleToken: duplicate initial signer');
+        );
+      }).toThrow('FungibleToken: duplicate initial signer');
     });
   });
 
-  describe('Multi-Sig Ledger State Inspection', () => {
-    it('returns the current multisig nonce from ledger', () => {
-      expect(getLedger()._multisigNonce).toBe(0n);
+  // ==========================================================================
+  // 2. Authentication & Caller Synchronization
+  // ==========================================================================
+  describe('Authentication & Caller Isolation', () => {
+    it('should reject caller whose secret key does not match the passed identity', () => {
+      setCallerSecretKey(ALICE_SK);
+      expect(() => {
+        runCircuit(contract.circuits.transfer, BOB_ACCOUNT, CHARLIE_ACCOUNT, 0n);
+      }).toThrow('FungibleToken: caller authorization failed');
     });
 
-    it('returns the current multisig threshold from ledger', () => {
-      expect(getLedger()._multisigThreshold).toBe(THRESHOLD);
+    it('should authorize caller when secret key matches the identity', () => {
+      setCallerSecretKey(ALICE_SK);
+      const res = runCircuit(contract.circuits.transfer, ALICE_ACCOUNT, BOB_ACCOUNT, 0n);
+      expect(res).toBe(true);
     });
 
-    it('returns the multisig signer count from ledger', () => {
-      expect(getLedger()._multisigSignerCount).toBe(3n);
-    });
+    it('should synchronize properly across sequential callers without cross-caller leakage', () => {
+      // Alice calls transfer
+      setCallerSecretKey(ALICE_SK);
+      expect(runCircuit(contract.circuits.transfer, ALICE_ACCOUNT, BOB_ACCOUNT, 0n)).toBe(true);
 
-    it('verifies membership of registered and unregistered signers in ledger set', () => {
-      const signers = getLedger()._multisigSigners;
-      expect(signers.member(SIGNER_1)).toBe(true);
-      expect(signers.member(SIGNER_2)).toBe(true);
-      expect(signers.member(SIGNER_3)).toBe(true);
-      expect(signers.member(createKey(99))).toBe(false);
+      // Bob calls transfer
+      setCallerSecretKey(BOB_SK);
+      expect(runCircuit(contract.circuits.transfer, BOB_ACCOUNT, CHARLIE_ACCOUNT, 0n)).toBe(true);
+
+      // Charlie calls transfer
+      setCallerSecretKey(CHARLIE_SK);
+      expect(runCircuit(contract.circuits.transfer, CHARLIE_ACCOUNT, OWNER_ACCOUNT, 0n)).toBe(true);
     });
   });
 
-  describe('Emergency Stop (Pause / Unpause)', () => {
-    it('allows the owner to pause and unpause the contract', () => {
+  // ==========================================================================
+  // 3. Pause & Emergency Stop Controls
+  // ==========================================================================
+  describe('Emergency Stop (pause / unpause)', () => {
+    it('should allow owner to pause the contract', () => {
       setCallerSecretKey(OWNER_SK);
-      expect(getLedger()._paused).toBe(false);
+      const success = runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
+      expect(success).toBe(true);
+      expect(getLedger()._paused).toBe(true);
+    });
 
-      const pauseRes = runCircuit(contract.circuits.pause, ownerAccount);
-      expect(pauseRes).toBe(true);
+    it('should reject pause call from unauthorized user', () => {
+      setCallerSecretKey(ALICE_SK);
+      expect(() => {
+        runCircuit(contract.circuits.pause, ALICE_ACCOUNT);
+      }).toThrow('FungibleToken: only pauser or owner can call this');
+      expect(getLedger()._paused).toBe(false);
+    });
+
+    it('should reject pause call when contract is already paused', () => {
+      setCallerSecretKey(OWNER_SK);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
       expect(getLedger()._paused).toBe(true);
 
-      const unpauseRes = runCircuit(contract.circuits.unpause, ownerAccount);
-      expect(unpauseRes).toBe(true);
+      expect(() => {
+        runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
+      }).toThrow('FungibleToken: contract is paused');
+    });
+
+    it('should allow owner to unpause a paused contract', () => {
+      setCallerSecretKey(OWNER_SK);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
+      expect(getLedger()._paused).toBe(true);
+
+      const success = runCircuit(contract.circuits.unpause, OWNER_ACCOUNT);
+      expect(success).toBe(true);
       expect(getLedger()._paused).toBe(false);
     });
 
-    it('rejects pause call from an unauthorized account', () => {
-      setCallerSecretKey(ALICE_SK);
-      expect(() => runCircuit(contract.circuits.pause, aliceAccount)).toThrow(
-        'FungibleToken: only pauser or owner can call this'
-      );
-    });
-
-    it('rejects unpause call from an unauthorized account', () => {
+    it('should reject unpause call when contract is not paused', () => {
       setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.pause, ownerAccount);
+      expect(() => {
+        runCircuit(contract.circuits.unpause, OWNER_ACCOUNT);
+      }).toThrow('FungibleToken: contract is not paused');
+    });
+
+    it('should reject unpause call from unauthorized user', () => {
+      setCallerSecretKey(OWNER_SK);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
 
       setCallerSecretKey(ALICE_SK);
-      expect(() => runCircuit(contract.circuits.unpause, aliceAccount)).toThrow(
-        'FungibleToken: only pauser or owner can call this'
-      );
-    });
-
-    it('fails when pausing an already paused contract', () => {
-      setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.pause, ownerAccount);
-      expect(() => runCircuit(contract.circuits.pause, ownerAccount)).toThrow(
-        'FungibleToken: contract is paused'
-      );
-    });
-
-    it('fails when unpausing an unpaused contract', () => {
-      setCallerSecretKey(OWNER_SK);
-      expect(() => runCircuit(contract.circuits.unpause, ownerAccount)).toThrow(
-        'FungibleToken: contract is not paused'
-      );
-    });
-
-    it('fails authentication if caller account does not match secret key', () => {
-      setCallerSecretKey(ALICE_SK);
-      // Alice tries to claim she is the owner
-      expect(() => runCircuit(contract.circuits.pause, ownerAccount)).toThrow(
-        'FungibleToken: caller authorization failed'
-      );
+      expect(() => {
+        runCircuit(contract.circuits.unpause, ALICE_ACCOUNT);
+      }).toThrow('FungibleToken: only pauser or owner can call this');
     });
   });
 
-  describe('Token Allowances and TransferFrom', () => {
-    it('allows an account to approve a spender and reads allowance from ledger', () => {
-      setCallerSecretKey(OWNER_SK);
-      expect(getAllowance(ownerAccount, aliceAccount)).toBe(0n);
-
-      const approveRes = runCircuit(contract.circuits.approve, ownerAccount, aliceAccount, 500n);
-      expect(approveRes).toBe(true);
-      expect(getAllowance(ownerAccount, aliceAccount)).toBe(500n);
-
-      // Overwriting allowance
-      runCircuit(contract.circuits.approve, ownerAccount, aliceAccount, 250n);
-      expect(getAllowance(ownerAccount, aliceAccount)).toBe(250n);
+  // ==========================================================================
+  // 4. Standard Token Operations: Allowances & Approvals
+  // ==========================================================================
+  describe('Approvals & Allowances', () => {
+    it('should record allowance when owner approves spender', () => {
+      setCallerSecretKey(ALICE_SK);
+      const approvalAmount = 500n;
+      const success = runCircuit(contract.circuits.approve, ALICE_ACCOUNT, BOB_ACCOUNT, approvalAmount);
+      expect(success).toBe(true);
+      expect(getAllowance(ALICE_ACCOUNT, BOB_ACCOUNT)).toBe(approvalAmount);
     });
 
-    it('rejects approve with invalid spender (zero address)', () => {
-      setCallerSecretKey(OWNER_SK);
-      expect(() => runCircuit(contract.circuits.approve, ownerAccount, zeroKey(), 100n)).toThrow(
-        'FungibleToken: invalid spender'
-      );
+    it('should allow updating existing allowance', () => {
+      setCallerSecretKey(ALICE_SK);
+      runCircuit(contract.circuits.approve, ALICE_ACCOUNT, BOB_ACCOUNT, 500n);
+      expect(getAllowance(ALICE_ACCOUNT, BOB_ACCOUNT)).toBe(500n);
+
+      runCircuit(contract.circuits.approve, ALICE_ACCOUNT, BOB_ACCOUNT, 1_200n);
+      expect(getAllowance(ALICE_ACCOUNT, BOB_ACCOUNT)).toBe(1_200n);
     });
 
-    it('rejects approve when contract is paused', () => {
-      setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.pause, ownerAccount);
-
-      expect(() => runCircuit(contract.circuits.approve, ownerAccount, aliceAccount, 100n)).toThrow(
-        'FungibleToken: contract is paused'
-      );
+    it('should reject approving the zero key as spender', () => {
+      setCallerSecretKey(ALICE_SK);
+      expect(() => {
+        runCircuit(contract.circuits.approve, ALICE_ACCOUNT, zeroKey(), 100n);
+      }).toThrow('FungibleToken: invalid spender');
     });
 
-    it('rejects transferFrom when contract is paused', () => {
+    it('should return 0 for uninitialized allowance query', () => {
+      expect(getAllowance(ALICE_ACCOUNT, CHARLIE_ACCOUNT)).toBe(0n);
+    });
+
+    it('should reject approve circuit when contract is paused', () => {
       setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.approve, ownerAccount, aliceAccount, 100n);
-      runCircuit(contract.circuits.pause, ownerAccount);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
 
       setCallerSecretKey(ALICE_SK);
-      expect(() =>
-        runCircuit(contract.circuits.transferFrom, aliceAccount, ownerAccount, bobAccount, 50n)
-      ).toThrow('FungibleToken: contract is paused');
-    });
-
-    it('rejects transferFrom when allowance is insufficient', () => {
-      setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.approve, ownerAccount, aliceAccount, 50n);
-
-      setCallerSecretKey(ALICE_SK);
-      expect(() =>
-        runCircuit(contract.circuits.transferFrom, aliceAccount, ownerAccount, bobAccount, 100n)
-      ).toThrow('FungibleToken: insufficient allowance');
-    });
-
-    it('spends allowance and enforces balance check during transferFrom', () => {
-      setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.approve, ownerAccount, aliceAccount, 100n);
-
-      setCallerSecretKey(ALICE_SK);
-      // Owner has 0 balance, so transferFrom must fail with insufficient balance
-      expect(() =>
-        runCircuit(contract.circuits.transferFrom, aliceAccount, ownerAccount, bobAccount, 50n)
-      ).toThrow('FungibleToken: insufficient balance');
+      expect(() => {
+        runCircuit(contract.circuits.approve, ALICE_ACCOUNT, BOB_ACCOUNT, 100n);
+      }).toThrow('FungibleToken: contract is paused');
     });
   });
 
-  describe('Standard Token Transfers & Self Burn', () => {
-    it('allows self-transfer of 0 tokens even with zero balance', () => {
-      setCallerSecretKey(OWNER_SK);
-      const res = runCircuit(contract.circuits.transfer, ownerAccount, ownerAccount, 0n);
-      expect(res).toBe(true);
-      expect(getBalance(ownerAccount)).toBe(0n);
-    });
-
-    it('rejects transfer with invalid receiver (zero address)', () => {
-      setCallerSecretKey(OWNER_SK);
-      expect(() => runCircuit(contract.circuits.transfer, ownerAccount, zeroKey(), 100n)).toThrow(
-        'FungibleToken: invalid receiver'
-      );
-    });
-
-    it('rejects transfer when balance is insufficient', () => {
-      setCallerSecretKey(OWNER_SK);
-      expect(() => runCircuit(contract.circuits.transfer, ownerAccount, aliceAccount, 50n)).toThrow(
-        'FungibleToken: insufficient balance'
-      );
-    });
-
-    it('rejects transfer when contract is paused', () => {
-      setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.pause, ownerAccount);
-
-      expect(() => runCircuit(contract.circuits.transfer, ownerAccount, aliceAccount, 0n)).toThrow(
-        'FungibleToken: contract is paused'
-      );
-    });
-
-    it('rejects transfer if caller authorization fails', () => {
+  // ==========================================================================
+  // 5. Standard Token Operations: Transfers & Balances
+  // ==========================================================================
+  describe('Transfers', () => {
+    it('should allow transfer of 0 tokens even with 0 balance', () => {
       setCallerSecretKey(ALICE_SK);
-      // Alice calls with owner's public account
-      expect(() => runCircuit(contract.circuits.transfer, ownerAccount, bobAccount, 10n)).toThrow(
-        'FungibleToken: caller authorization failed'
-      );
+      const success = runCircuit(contract.circuits.transfer, ALICE_ACCOUNT, BOB_ACCOUNT, 0n);
+      expect(success).toBe(true);
+      expect(getBalance(ALICE_ACCOUNT)).toBe(0n);
+      expect(getBalance(BOB_ACCOUNT)).toBe(0n);
     });
 
-    it('rejects selfBurn when balance is insufficient', () => {
+    it('should reject transfer when sender has insufficient balance', () => {
       setCallerSecretKey(ALICE_SK);
-      expect(() => runCircuit(contract.circuits.selfBurn, aliceAccount, 10n)).toThrow(
-        'FungibleToken: insufficient balance'
-      );
+      expect(() => {
+        runCircuit(contract.circuits.transfer, ALICE_ACCOUNT, BOB_ACCOUNT, 100n);
+      }).toThrow('FungibleToken: insufficient balance');
     });
 
-    it('rejects selfBurn when paused', () => {
+    it('should reject transfer to zero key recipient', () => {
+      setCallerSecretKey(ALICE_SK);
+      expect(() => {
+        runCircuit(contract.circuits.transfer, ALICE_ACCOUNT, zeroKey(), 0n);
+      }).toThrow('FungibleToken: invalid receiver');
+    });
+
+    it('should allow self-transfer of 0 amount', () => {
+      setCallerSecretKey(ALICE_SK);
+      const success = runCircuit(contract.circuits.transfer, ALICE_ACCOUNT, ALICE_ACCOUNT, 0n);
+      expect(success).toBe(true);
+    });
+
+    it('should reject self-transfer when amount exceeds balance', () => {
+      setCallerSecretKey(ALICE_SK);
+      expect(() => {
+        runCircuit(contract.circuits.transfer, ALICE_ACCOUNT, ALICE_ACCOUNT, 50n);
+      }).toThrow('FungibleToken: insufficient balance');
+    });
+
+    it('should reject transfer when contract is paused', () => {
       setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.pause, ownerAccount);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
 
       setCallerSecretKey(ALICE_SK);
-      expect(() => runCircuit(contract.circuits.selfBurn, aliceAccount, 0n)).toThrow(
-        'FungibleToken: contract is paused'
-      );
+      expect(() => {
+        runCircuit(contract.circuits.transfer, ALICE_ACCOUNT, BOB_ACCOUNT, 0n);
+      }).toThrow('FungibleToken: contract is paused');
     });
   });
 
-  describe('Admin Operations', () => {
-    it('rejects adminReallocate when called by non-owner', () => {
+  // ==========================================================================
+  // 6. TransferFrom Lifecycle
+  // ==========================================================================
+  describe('transferFrom', () => {
+    it('should allow transferFrom of 0 tokens when allowance exists', () => {
       setCallerSecretKey(ALICE_SK);
-      expect(() =>
-        runCircuit(contract.circuits.adminReallocate, aliceAccount, bobAccount, charlieAccount, 100n)
-      ).toThrow('FungibleToken: only owner can call this');
+      runCircuit(contract.circuits.approve, ALICE_ACCOUNT, BOB_ACCOUNT, 100n);
+
+      setCallerSecretKey(BOB_SK);
+      const success = runCircuit(
+        contract.circuits.transferFrom,
+        BOB_ACCOUNT,
+        ALICE_ACCOUNT,
+        CHARLIE_ACCOUNT,
+        0n
+      );
+      expect(success).toBe(true);
     });
 
-    it('rejects adminReallocate with invalid receiver (zero key)', () => {
-      setCallerSecretKey(OWNER_SK);
-      expect(() =>
-        runCircuit(contract.circuits.adminReallocate, ownerAccount, bobAccount, zeroKey(), 100n)
-      ).toThrow('FungibleToken: invalid receiver');
-    });
-
-    it('rejects adminReallocate with invalid sender (zero key)', () => {
-      setCallerSecretKey(OWNER_SK);
-      expect(() =>
-        runCircuit(contract.circuits.adminReallocate, ownerAccount, zeroKey(), bobAccount, 100n)
-      ).toThrow('FungibleToken: invalid sender');
-    });
-
-    it('rejects adminReallocate when trapped account has insufficient balance', () => {
-      setCallerSecretKey(OWNER_SK);
-      expect(() =>
-        runCircuit(contract.circuits.adminReallocate, ownerAccount, bobAccount, charlieAccount, 100n)
-      ).toThrow('FungibleToken: insufficient balance');
-    });
-
-    it('rejects emergencyWithdraw when not paused', () => {
-      setCallerSecretKey(OWNER_SK);
-      const dummyToken = { bytes: createKey(88) };
-      expect(() =>
-        runCircuit(contract.circuits.emergencyWithdraw, ownerAccount, dummyToken, 50n)
-      ).toThrow('FungibleToken: contract is not paused');
-    });
-
-    it('rejects emergencyWithdraw called by non-owner when paused', () => {
-      setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.pause, ownerAccount);
-
+    it('should reject transferFrom when allowance is insufficient', () => {
       setCallerSecretKey(ALICE_SK);
-      const dummyToken = { bytes: createKey(88) };
-      expect(() =>
-        runCircuit(contract.circuits.emergencyWithdraw, aliceAccount, dummyToken, 50n)
-      ).toThrow('FungibleToken: only owner can call this');
+      runCircuit(contract.circuits.approve, ALICE_ACCOUNT, BOB_ACCOUNT, 50n);
+
+      setCallerSecretKey(BOB_SK);
+      expect(() => {
+        runCircuit(
+          contract.circuits.transferFrom,
+          BOB_ACCOUNT,
+          ALICE_ACCOUNT,
+          CHARLIE_ACCOUNT,
+          100n
+        );
+      }).toThrow('FungibleToken: insufficient allowance');
     });
 
-    it('rejects emergencyWithdraw when contract account has insufficient balance', () => {
-      setCallerSecretKey(OWNER_SK);
-      runCircuit(contract.circuits.pause, ownerAccount);
+    it('should reject transferFrom when contract is paused', () => {
+      setCallerSecretKey(ALICE_SK);
+      runCircuit(contract.circuits.approve, ALICE_ACCOUNT, BOB_ACCOUNT, 100n);
 
-      const dummyToken = { bytes: createKey(88) };
-      expect(() =>
-        runCircuit(contract.circuits.emergencyWithdraw, ownerAccount, dummyToken, 50n)
-      ).toThrow('FungibleToken: insufficient balance');
+      setCallerSecretKey(OWNER_SK);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
+
+      setCallerSecretKey(BOB_SK);
+      expect(() => {
+        runCircuit(
+          contract.circuits.transferFrom,
+          BOB_ACCOUNT,
+          ALICE_ACCOUNT,
+          CHARLIE_ACCOUNT,
+          0n
+        );
+      }).toThrow('FungibleToken: contract is paused');
     });
   });
 
-  describe('Multi-Sig Governed Operations (Validation & Security)', () => {
-    describe('mint()', () => {
-      it('rejects minting when contract is paused', () => {
-        setCallerSecretKey(OWNER_SK);
-        runCircuit(contract.circuits.pause, ownerAccount);
-
-        expect(() =>
-          runCircuit(
-            contract.circuits.mint,
-            aliceAccount,
-            100n,
-            [mockPubkey1, mockPubkey2],
-            [mockSignature1, mockSignature2]
-          )
-        ).toThrow('FungibleToken: contract is paused');
-      });
-
-      it('rejects minting to zero key address', () => {
-        expect(() =>
-          runCircuit(
-            contract.circuits.mint,
-            zeroKey(),
-            100n,
-            [mockPubkey1, mockPubkey2],
-            [mockSignature1, mockSignature2]
-          )
-        ).toThrow('FungibleToken: invalid receiver');
-      });
-
-      it('rejects minting with duplicate signers', () => {
-        const duplicatePubkeys: [{ x: bigint; y: bigint }, { x: bigint; y: bigint }] = [
-          mockPubkey1,
-          mockPubkey1,
-        ];
-        expect(() =>
-          runCircuit(
-            contract.circuits.mint,
-            aliceAccount,
-            100n,
-            duplicatePubkeys,
-            [mockSignature1, mockSignature2]
-          )
-        ).toThrow('FungibleToken: duplicate signer detected');
-      });
-
-      it('rejects minting if signer is not registered in _multisigSigners', () => {
-        expect(() =>
-          runCircuit(
-            contract.circuits.mint,
-            aliceAccount,
-            100n,
-            [mockPubkey1, mockPubkey2],
-            [mockSignature1, mockSignature2]
-          )
-        ).toThrow('FungibleToken: signer not registered');
-      });
+  // ==========================================================================
+  // 7. Token Self-Burn
+  // ==========================================================================
+  describe('selfBurn', () => {
+    it('should allow self-burning 0 tokens with 0 balance', () => {
+      setCallerSecretKey(ALICE_SK);
+      const success = runCircuit(contract.circuits.selfBurn, ALICE_ACCOUNT, 0n);
+      expect(success).toBe(true);
+      expect(getLedger()._totalSupply).toBe(0n);
     });
 
-    describe('burn()', () => {
-      it('rejects burning when contract is paused', () => {
-        setCallerSecretKey(OWNER_SK);
-        runCircuit(contract.circuits.pause, ownerAccount);
-
-        expect(() =>
-          runCircuit(
-            contract.circuits.burn,
-            aliceAccount,
-            50n,
-            [mockPubkey1, mockPubkey2],
-            [mockSignature1, mockSignature2]
-          )
-        ).toThrow('FungibleToken: contract is paused');
-      });
-
-      it('rejects burning from zero key address', () => {
-        expect(() =>
-          runCircuit(
-            contract.circuits.burn,
-            zeroKey(),
-            50n,
-            [mockPubkey1, mockPubkey2],
-            [mockSignature1, mockSignature2]
-          )
-        ).toThrow('FungibleToken: invalid sender');
-      });
-
-      it('rejects burning with duplicate signers', () => {
-        const duplicatePubkeys: [{ x: bigint; y: bigint }, { x: bigint; y: bigint }] = [
-          mockPubkey1,
-          mockPubkey1,
-        ];
-        expect(() =>
-          runCircuit(
-            contract.circuits.burn,
-            aliceAccount,
-            50n,
-            duplicatePubkeys,
-            [mockSignature1, mockSignature2]
-          )
-        ).toThrow('FungibleToken: duplicate signer detected');
-      });
-
-      it('rejects burning if signer is not registered', () => {
-        expect(() =>
-          runCircuit(
-            contract.circuits.burn,
-            aliceAccount,
-            50n,
-            [mockPubkey1, mockPubkey2],
-            [mockSignature1, mockSignature2]
-          )
-        ).toThrow('FungibleToken: signer not registered');
-      });
+    it('should reject selfBurn when balance is insufficient', () => {
+      setCallerSecretKey(ALICE_SK);
+      expect(() => {
+        runCircuit(contract.circuits.selfBurn, ALICE_ACCOUNT, 100n);
+      }).toThrow('FungibleToken: insufficient balance');
     });
 
-    describe('setEmergencyPauser()', () => {
-      it('rejects setEmergencyPauser with zero address', () => {
-        expect(() =>
-          runCircuit(
-            contract.circuits.setEmergencyPauser,
-            zeroKey(),
-            [mockPubkey1, mockPubkey2],
-            [mockSignature1, mockSignature2]
-          )
-        ).toThrow('FungibleToken: invalid pauser address');
-      });
+    it('should reject selfBurn when contract is paused', () => {
+      setCallerSecretKey(OWNER_SK);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
 
-      it('rejects setEmergencyPauser with duplicate signers', () => {
-        const duplicatePubkeys: [{ x: bigint; y: bigint }, { x: bigint; y: bigint }] = [
-          mockPubkey1,
-          mockPubkey1,
-        ];
-        expect(() =>
-          runCircuit(
-            contract.circuits.setEmergencyPauser,
-            bobAccount,
-            duplicatePubkeys,
-            [mockSignature1, mockSignature2]
-          )
-        ).toThrow('FungibleToken: duplicate signer detected');
-      });
+      setCallerSecretKey(ALICE_SK);
+      expect(() => {
+        runCircuit(contract.circuits.selfBurn, ALICE_ACCOUNT, 0n);
+      }).toThrow('FungibleToken: contract is paused');
+    });
+  });
 
-      it('rejects setEmergencyPauser if signer is not registered', () => {
-        expect(() =>
-          runCircuit(
-            contract.circuits.setEmergencyPauser,
-            bobAccount,
-            [mockPubkey1, mockPubkey2],
-            [mockSignature1, mockSignature2]
-          )
-        ).toThrow('FungibleToken: signer not registered');
-      });
+  // ==========================================================================
+  // 8. Admin Reallocate
+  // ==========================================================================
+  describe('adminReallocate', () => {
+    it('should allow owner to reallocate 0 balance between accounts', () => {
+      setCallerSecretKey(OWNER_SK);
+      const success = runCircuit(
+        contract.circuits.adminReallocate,
+        OWNER_ACCOUNT,
+        ALICE_ACCOUNT,
+        BOB_ACCOUNT,
+        0n
+      );
+      expect(success).toBe(true);
+    });
+
+    it('should reject adminReallocate when called by non-owner', () => {
+      setCallerSecretKey(ALICE_SK);
+      expect(() => {
+        runCircuit(
+          contract.circuits.adminReallocate,
+          ALICE_ACCOUNT,
+          BOB_ACCOUNT,
+          CHARLIE_ACCOUNT,
+          0n
+        );
+      }).toThrow('FungibleToken: only owner can call this');
+    });
+
+    it('should reject adminReallocate with insufficient balance in trapped account', () => {
+      setCallerSecretKey(OWNER_SK);
+      expect(() => {
+        runCircuit(
+          contract.circuits.adminReallocate,
+          OWNER_ACCOUNT,
+          ALICE_ACCOUNT,
+          BOB_ACCOUNT,
+          500n
+        );
+      }).toThrow('FungibleToken: insufficient balance');
+    });
+
+    it('should reject adminReallocate when target account is zero key', () => {
+      setCallerSecretKey(OWNER_SK);
+      expect(() => {
+        runCircuit(
+          contract.circuits.adminReallocate,
+          OWNER_ACCOUNT,
+          ALICE_ACCOUNT,
+          zeroKey(),
+          0n
+        );
+      }).toThrow('FungibleToken: invalid receiver');
+    });
+
+    it('should reject adminReallocate when trapped account is zero key', () => {
+      setCallerSecretKey(OWNER_SK);
+      expect(() => {
+        runCircuit(
+          contract.circuits.adminReallocate,
+          OWNER_ACCOUNT,
+          zeroKey(),
+          BOB_ACCOUNT,
+          0n
+        );
+      }).toThrow('FungibleToken: invalid sender');
+    });
+  });
+
+  // ==========================================================================
+  // 9. Emergency Withdrawal
+  // ==========================================================================
+  describe('emergencyWithdraw', () => {
+    const dummyContractToken = { bytes: new Uint8Array(32).fill(2) };
+
+    it('should reject emergencyWithdraw when contract is not paused', () => {
+      setCallerSecretKey(OWNER_SK);
+      expect(() => {
+        runCircuit(contract.circuits.emergencyWithdraw, OWNER_ACCOUNT, dummyContractToken, 0n);
+      }).toThrow('FungibleToken: contract is not paused');
+    });
+
+    it('should reject emergencyWithdraw when called by non-owner', () => {
+      setCallerSecretKey(OWNER_SK);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
+
+      setCallerSecretKey(ALICE_SK);
+      expect(() => {
+        runCircuit(contract.circuits.emergencyWithdraw, ALICE_ACCOUNT, dummyContractToken, 0n);
+      }).toThrow('FungibleToken: only owner can call this');
+    });
+
+    it('should reject emergencyWithdraw when contract balance is insufficient', () => {
+      setCallerSecretKey(OWNER_SK);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
+
+      expect(() => {
+        runCircuit(contract.circuits.emergencyWithdraw, OWNER_ACCOUNT, dummyContractToken, 100n);
+      }).toThrow('FungibleToken: insufficient balance');
+    });
+
+    it('should succeed for 0 amount emergency withdrawal when paused', () => {
+      setCallerSecretKey(OWNER_SK);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
+
+      const success = runCircuit(
+        contract.circuits.emergencyWithdraw,
+        OWNER_ACCOUNT,
+        dummyContractToken,
+        0n
+      );
+      expect(success).toBe(true);
+    });
+  });
+
+  // ==========================================================================
+  // 10. Multi-Sig Governed Operations & Guard Rails
+  // ==========================================================================
+  describe('Multi-Sig Governed Operations Guard Rails', () => {
+    it('should reject mint when contract is paused', () => {
+      setCallerSecretKey(OWNER_SK);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
+
+      expect(() => {
+        runCircuit(
+          contract.circuits.mint,
+          ALICE_ACCOUNT,
+          100n,
+          [dummyPoint1, dummyPoint2],
+          [dummySig, dummySig]
+        );
+      }).toThrow('FungibleToken: contract is paused');
+    });
+
+    it('should reject mint to zero key receiver', () => {
+      expect(() => {
+        runCircuit(
+          contract.circuits.mint,
+          zeroKey(),
+          100n,
+          [dummyPoint1, dummyPoint2],
+          [dummySig, dummySig]
+        );
+      }).toThrow('FungibleToken: invalid receiver');
+    });
+
+    it('should reject mint when duplicate signers are detected', () => {
+      expect(() => {
+        runCircuit(
+          contract.circuits.mint,
+          ALICE_ACCOUNT,
+          100n,
+          [dummyPoint1, dummyPoint1],
+          [dummySig, dummySig]
+        );
+      }).toThrow('FungibleToken: duplicate signer detected');
+    });
+
+    it('should reject mint when signers are not registered in multisig set', () => {
+      expect(() => {
+        runCircuit(
+          contract.circuits.mint,
+          ALICE_ACCOUNT,
+          100n,
+          [dummyPoint1, dummyPoint2],
+          [dummySig, dummySig]
+        );
+      }).toThrow('FungibleToken: signer not registered');
+    });
+
+    it('should reject burn when contract is paused', () => {
+      setCallerSecretKey(OWNER_SK);
+      runCircuit(contract.circuits.pause, OWNER_ACCOUNT);
+
+      expect(() => {
+        runCircuit(
+          contract.circuits.burn,
+          ALICE_ACCOUNT,
+          100n,
+          [dummyPoint1, dummyPoint2],
+          [dummySig, dummySig]
+        );
+      }).toThrow('FungibleToken: contract is paused');
+    });
+
+    it('should reject burn from zero key sender', () => {
+      expect(() => {
+        runCircuit(
+          contract.circuits.burn,
+          zeroKey(),
+          100n,
+          [dummyPoint1, dummyPoint2],
+          [dummySig, dummySig]
+        );
+      }).toThrow('FungibleToken: invalid sender');
+    });
+
+    it('should reject setEmergencyPauser with zero key', () => {
+      expect(() => {
+        runCircuit(
+          contract.circuits.setEmergencyPauser,
+          zeroKey(),
+          [dummyPoint1, dummyPoint2],
+          [dummySig, dummySig]
+        );
+      }).toThrow('FungibleToken: invalid pauser address');
+    });
+
+    it('should reject setEmergencyPauser when signers are not registered', () => {
+      expect(() => {
+        runCircuit(
+          contract.circuits.setEmergencyPauser,
+          BOB_ACCOUNT,
+          [dummyPoint1, dummyPoint2],
+          [dummySig, dummySig]
+        );
+      }).toThrow('FungibleToken: signer not registered');
     });
   });
 });

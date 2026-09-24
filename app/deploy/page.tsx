@@ -964,7 +964,13 @@ export default function DeployPage() {
                                     {selectedBlueprint.constructorParams.map((param) => {
                                         const cleanName = param.name.replace(/^_+/, '').toLowerCase();
                                         const isSalt = cleanName.includes('salt') || param.label?.toLowerCase().includes('salt');
-                                        const isAddressType = !isSalt && (param.type === 'address' || param.compactType?.includes('Bytes'));
+                                        const isVector = Boolean(
+                                            param.compactType?.startsWith('Vector') ||
+                                            param.description?.startsWith('Vector') ||
+                                            cleanName.includes('signers') ||
+                                            param.label?.toLowerCase().includes('signers')
+                                        );
+                                        const isAddressType = !isSalt && !isVector && (param.type === 'address' || (param.compactType?.includes('Bytes') && !param.compactType?.startsWith('Vector')));
 
                                         return (
                                             <div key={param.name} className="space-y-1">
@@ -974,8 +980,8 @@ export default function DeployPage() {
                                                         <code className="text-[10px] font-mono text-cyan-400 bg-midnight-900 px-1 py-0.5 rounded">
                                                             {param.compactType || param.type}
                                                         </code>
-                                                        {param.required ? (
-                                                            <span className="text-rose-400">*</span>
+                                                        {param.required || isVector ? (
+                                                            <span className="text-rose-400" title="Required input">*</span>
                                                         ) : (
                                                             <span className="text-[10px] text-slate-500 font-normal">(optional)</span>
                                                         )}
@@ -997,6 +1003,40 @@ export default function DeployPage() {
                                                             <Dices className="h-3 w-3" />
                                                             <span>Generate Random Salt</span>
                                                         </button>
+                                                    )}
+                                                    {isVector && (
+                                                        <div className="flex items-center space-x-2">
+                                                            {isExtensionConnected && extensionAddress && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => {
+                                                                        const triple = `${extensionAddress}, ${extensionAddress}, ${extensionAddress}`;
+                                                                        setConstructorArgs((prev) => ({
+                                                                            ...prev,
+                                                                            [param.name]: triple,
+                                                                        }));
+                                                                    }}
+                                                                    className="text-[10px] font-semibold text-emerald-400 hover:text-emerald-300 underline cursor-pointer"
+                                                                >
+                                                                    Fill Connected Lace Address (3x)
+                                                                </button>
+                                                            )}
+                                                            {walletStatus?.unshieldedAddress && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => {
+                                                                        const triple = `${walletStatus.unshieldedAddress}, ${walletStatus.unshieldedAddress}, ${walletStatus.unshieldedAddress}`;
+                                                                        setConstructorArgs((prev) => ({
+                                                                            ...prev,
+                                                                            [param.name]: triple,
+                                                                        }));
+                                                                    }}
+                                                                    className="text-[10px] font-medium text-cyan-400 hover:text-cyan-300 underline cursor-pointer"
+                                                                >
+                                                                    Fill Studio Address (3x)
+                                                                </button>
+                                                            )}
+                                                        </div>
                                                     )}
                                                     {isAddressType && (
                                                         <div className="flex items-center space-x-2">
@@ -1033,7 +1073,7 @@ export default function DeployPage() {
                                                 </div>
                                                 <input
                                                     type={param.type === 'number' ? 'number' : 'text'}
-                                                    placeholder={param.placeholder || (isSalt ? 'Leave empty to auto-generate cryptographic salt...' : `Enter ${param.label}...`)}
+                                                    placeholder={param.placeholder || (isSalt ? 'Leave empty to auto-generate cryptographic salt...' : isVector ? 'Enter 3 raw Lace wallet addresses, e.g. [mn_addr_1..., mn_addr_2..., mn_addr_3...] or comma-separated' : `Enter ${param.label}...`)}
                                                     value={constructorArgs[param.name] ?? ''}
                                                     onChange={(e) =>
                                                         setConstructorArgs((prev) => ({
@@ -1046,6 +1086,11 @@ export default function DeployPage() {
                                                 {isSalt && (
                                                     <p className="text-[10px] text-slate-500">
                                                         32-byte cryptographic salt isolating caller account commitments across contracts. Leave empty to auto-generate.
+                                                    </p>
+                                                )}
+                                                {isVector && (
+                                                    <p className="text-[10px] text-slate-400 leading-normal">
+                                                        <strong className="text-cyan-400">Required Signers Vector:</strong> Formats supported: Array format <code className="text-amber-300">[addr1, addr2, addr3]</code>, JSON array <code className="text-amber-300">["addr1", "addr2", "addr3"]</code>, or comma/newline-separated raw Lace wallet addresses (<code className="text-cyan-300">mn_addr_preprod1...</code>) / 32-byte hex strings.
                                                     </p>
                                                 )}
                                                 {isAddressType && (

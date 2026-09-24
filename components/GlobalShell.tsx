@@ -13,7 +13,7 @@ import { InfrastructureSettingsModal } from './InfrastructureSettingsModal';
 
 const Modals: React.FC = () => {
     const { isSyncDashboardOpen, setIsSyncDashboardOpen, isSettingsOpen, setIsSettingsOpen } = useSystem();
-    const { seed, walletStatus } = useWallet();
+    const { seed, walletStatus, fetchWalletStatus } = useWallet();
     return (
         <>
             <SyncDashboardModal
@@ -22,6 +22,7 @@ const Modals: React.FC = () => {
                 seed={seed}
                 initialData={walletStatus?.syncProgress}
                 isSynced={walletStatus?.isSynced ?? false}
+                onResyncSuccess={() => fetchWalletStatus()}
             />
             <InfrastructureSettingsModal
                 isOpen={isSettingsOpen}

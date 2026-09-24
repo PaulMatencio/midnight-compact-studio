@@ -42,6 +42,13 @@ const nextConfig = {
       topLevelAwait: true,
       layers: true,
     };
+    config.output = {
+      ...config.output,
+      environment: {
+        ...config.output?.environment,
+        asyncFunction: true,
+      },
+    };
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,

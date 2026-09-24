@@ -45,6 +45,20 @@ export const SystemProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             if (!text.trim()) return;
             const data = JSON.parse(text);
             if (data.success && data.data) {
+                if (data.data.proofServer?.status !== 'online') {
+                    try {
+                        const proverUrl = data.data.proofServer?.url || 'http://127.0.0.1:6300';
+                        const probeRes = await fetch(proverUrl, {
+                            method: 'GET',
+                            signal: AbortSignal.timeout(1500),
+                        });
+                        if (probeRes.status === 200 || probeRes.status === 404 || probeRes.status === 405) {
+                            data.data.proofServer.status = 'online';
+                        }
+                    } catch {
+                        // Keep server-reported offline status
+                    }
+                }
                 setSystemHealth(data.data);
                 if (data.data.deployment?.contractAddress && !activeContractAddress) {
                     setActiveContractAddress(data.data.deployment.contractAddress);

@@ -108,6 +108,7 @@ describe('parseContractConstructorParams', () => {
         expect(saltParam?.required).toBe(false);
         const signersParam = params.find((p) => p.name === 'initialSigners');
         expect(signersParam).toBeDefined();
+        expect(signersParam?.required).toBe(true);
         const thresholdParam = params.find((p) => p.name === 'threshold_');
         expect(thresholdParam?.defaultValue).toBe('2');
     });

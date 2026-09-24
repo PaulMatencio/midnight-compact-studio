@@ -38,7 +38,39 @@ export interface ExtensionBalances {
     dustCapDisplay?: string;
     shieldedBalance?: string;
     isSynced: boolean;
+    isLocked?: boolean;
+    isChannelShutdown?: boolean;
+    errorMessage?: string | null;
 }
+
+export function isWalletLockedError(err: any): boolean {
+    if (!err) return false;
+    const msg = String(err?.message || err?.reason || err?.code || err).toLowerCase();
+    return (
+        msg.includes('locked') ||
+        msg.includes('unlock') ||
+        msg.includes('passphrase') ||
+        msg.includes('password') ||
+        msg.includes('wallet is locked')
+    );
+}
+
+export function isChannelShutdownError(err: any): boolean {
+    if (!err) return false;
+    const msg = String(err?.message || err?.reason || err?.code || err).toLowerCase();
+    return (
+        msg.includes('shutdown') ||
+        msg.includes('closed') ||
+        msg.includes('channel') ||
+        msg.includes('object can no longer be used') ||
+        msg.includes('disconnected') ||
+        msg.includes('port closed')
+    );
+}
+
+// Module-level single-flight promise locks to prevent duplicate extension IPC calls
+let activeConnectPromise: Promise<any> | null = null;
+let activeFetchBalancesPromise: Promise<ExtensionBalances> | null = null;
 
 export interface MidnightDAppConnector {
     name?: string;
@@ -75,18 +107,65 @@ function withTimeout<T = any>(promise: Promise<any>, ms: number, fallback: T): P
     ]).catch(() => fallback);
 }
 
+export type BrowserWalletType = 'lace' | '1am';
+
+export interface BrowserWalletDescriptor {
+    id: BrowserWalletType;
+    name: string;
+    shortName: string;
+    description: string;
+    website: string;
+    downloadUrl: string;
+    rdns: string;
+    keys: string[];
+}
+
+export const SUPPORTED_BROWSER_WALLETS: Record<BrowserWalletType, BrowserWalletDescriptor> = {
+    lace: {
+        id: 'lace',
+        name: 'Midnight Lace',
+        shortName: 'Lace',
+        description: 'Official Midnight Lace browser extension by IOG',
+        website: 'https://midnight.network',
+        downloadUrl: 'https://midnight.network',
+        rdns: 'io.lace.wallet',
+        keys: ['mnLace', 'lace'],
+    },
+    '1am': {
+        id: '1am',
+        name: '1AM Wallet',
+        shortName: '1AM',
+        description: 'Privacy-first Midnight browser extension by 1am.xyz',
+        website: 'https://1am.xyz',
+        downloadUrl: 'https://1am.xyz',
+        rdns: 'xyz.1am.wallet',
+        keys: ['1am', 'oneAm', '1AM'],
+    },
+};
+
 /**
  * Checks whether a compatible Midnight browser extension is detected.
- * Inspects all known Midnight & Lace injection points on `window.midnight`.
+ * If walletType is specified, checks specifically for that wallet ('lace' | '1am').
  */
-export function isMidnightExtensionInstalled(): boolean {
-    return getMidnightConnector() !== null;
+export function isMidnightExtensionInstalled(walletType?: BrowserWalletType): boolean {
+    return getMidnightConnector(walletType) !== null;
+}
+
+/**
+ * Returns detection status for each supported browser wallet.
+ */
+export function getDetectedWallets(): Record<BrowserWalletType, boolean> {
+    return {
+        lace: getMidnightConnector('lace') !== null,
+        '1am': getMidnightConnector('1am') !== null,
+    };
 }
 
 /**
  * Retrieves the detected Midnight wallet connector descriptor.
+ * Supports preferring a specific wallet ('lace' | '1am') or discovering any available connector.
  */
-export function getMidnightConnector(): MidnightDAppConnector | null {
+export function getMidnightConnector(preferredWallet?: BrowserWalletType): MidnightDAppConnector | null {
     if (typeof window === 'undefined') return null;
 
     const w = window as any;
@@ -94,18 +173,69 @@ export function getMidnightConnector(): MidnightDAppConnector | null {
     if (w.midnight && typeof w.midnight === 'object') {
         const allWallets = Object.values(w.midnight) as any[];
 
-        // 1. Official Midnight DApp Connector specification:
-        // Prioritize Lace wallet implementing InitialAPI with connect(networkId)
+        // 1. Explicit 1AM Wallet request
+        if (preferredWallet === '1am') {
+            if (w.midnight['1am'] && (typeof w.midnight['1am'].connect === 'function' || typeof w.midnight['1am'].enable === 'function')) {
+                return w.midnight['1am'];
+            }
+            if (w.midnight.oneAm && (typeof w.midnight.oneAm.connect === 'function' || typeof w.midnight.oneAm.enable === 'function')) {
+                return w.midnight.oneAm;
+            }
+            if (w.midnight['1AM'] && (typeof w.midnight['1AM'].connect === 'function' || typeof w.midnight['1AM'].enable === 'function')) {
+                return w.midnight['1AM'];
+            }
+            const oneAmWallet = allWallets.find(
+                (p) =>
+                    p &&
+                    (typeof p.connect === 'function' || typeof p.enable === 'function') &&
+                    (p.rdns?.toLowerCase?.().includes('1am') || p.name?.toLowerCase?.().includes('1am'))
+            );
+            if (oneAmWallet) return oneAmWallet;
+            return null;
+        }
+
+        // 2. Explicit Lace Wallet request
+        if (preferredWallet === 'lace') {
+            const laceWallet = allWallets.find(
+                (p) =>
+                    p &&
+                    typeof p.connect === 'function' &&
+                    (p.rdns === 'io.lace.wallet' || p.name?.toLowerCase?.().includes('lace'))
+            );
+            if (laceWallet) return laceWallet;
+
+            if (w.midnight.mnLace && (typeof w.midnight.mnLace.connect === 'function' || typeof w.midnight.mnLace.enable === 'function')) {
+                return w.midnight.mnLace;
+            }
+            if (w.midnight.lace && (typeof w.midnight.lace.connect === 'function' || typeof w.midnight.lace.enable === 'function')) {
+                return w.midnight.lace;
+            }
+            if (w.cardano?.lace?.midnight) return w.cardano.lace.midnight;
+            if (w.cardano?.mnLace) return w.cardano.mnLace;
+            return null;
+        }
+
+        // 3. No specific preference: look for Lace, then 1AM, then any InitialAPI
         const laceWallet = allWallets.find(
             (p) => p && typeof p.connect === 'function' && (p.rdns === 'io.lace.wallet' || p.name?.toLowerCase?.().includes('lace'))
         );
         if (laceWallet) return laceWallet;
 
-        // 2. Any other injected Midnight wallet implementing InitialAPI with connect()
-        const anyConnectWallet = allWallets.find((p) => p && typeof p.connect === 'function');
-        if (anyConnectWallet) return anyConnectWallet;
+        if (w.midnight['1am'] && (typeof w.midnight['1am'].connect === 'function' || typeof w.midnight['1am'].enable === 'function')) {
+            return w.midnight['1am'];
+        }
+        if (w.midnight.oneAm && (typeof w.midnight.oneAm.connect === 'function' || typeof w.midnight.oneAm.enable === 'function')) {
+            return w.midnight.oneAm;
+        }
+        const oneAmWallet = allWallets.find(
+            (p) =>
+                p &&
+                (typeof p.connect === 'function' || typeof p.enable === 'function') &&
+                (p.rdns?.toLowerCase?.().includes('1am') || p.name?.toLowerCase?.().includes('1am'))
+        );
+        if (oneAmWallet) return oneAmWallet;
 
-        // 3. Named keys fallback
+        // Named keys fallback
         if (w.midnight.mnLace && (typeof w.midnight.mnLace.connect === 'function' || typeof w.midnight.mnLace.enable === 'function')) {
             return w.midnight.mnLace;
         }
@@ -113,7 +243,11 @@ export function getMidnightConnector(): MidnightDAppConnector | null {
             return w.midnight.lace;
         }
 
-        // 4. Any wallet with enable()
+        // Any other wallet with connect()
+        const anyConnectWallet = allWallets.find((p) => p && typeof p.connect === 'function');
+        if (anyConnectWallet) return anyConnectWallet;
+
+        // Any wallet with enable()
         const anyEnableWallet = allWallets.find((p) => p && typeof p.enable === 'function');
         if (anyEnableWallet) return anyEnableWallet;
     }
@@ -158,10 +292,10 @@ export function normalizeMidnightNetworkId(net?: string): string {
 }
 
 /**
- * Checks whether the current DApp origin is already authorized in Lace.
+ * Checks whether the current DApp origin is already authorized in the wallet extension.
  */
-export async function checkExtensionAuthorization(targetNetwork?: string): Promise<boolean> {
-    const connector = getMidnightConnector();
+export async function checkExtensionAuthorization(targetNetwork?: string, walletType?: BrowserWalletType): Promise<boolean> {
+    const connector = getMidnightConnector(walletType);
     if (!connector) return false;
     const connectArg = normalizeMidnightNetworkId(targetNetwork);
     try {
@@ -178,12 +312,10 @@ export async function checkExtensionAuthorization(targetNetwork?: string): Promi
 }
 
 /**
- * Connects to the Midnight Lace Extension (prompts user approval in extension without exposing seed).
+ * Connects to a Midnight browser wallet extension (Midnight Lace or 1AM Wallet).
+ * Prompts user approval in extension without exposing seed or private keys.
  */
-export async function connectMidnightLaceWallet(
-    targetNetwork: string = 'preprod',
-    onProgress?: (status: string) => void
-): Promise<{
+export interface ConnectBrowserWalletResult {
     api: MidnightConnectedApi;
     address: string;
     shieldedAddress?: string;
@@ -191,298 +323,423 @@ export async function connectMidnightLaceWallet(
     shieldedEncryptionPublicKey?: string;
     networkId?: string;
     balances: ExtensionBalances;
-}> {
-    const connector = getMidnightConnector();
-    if (!connector) {
-        const keys = getDetectedWalletKeys();
-        throw new Error(
-            `Midnight Lace browser extension was not detected on window.midnight. (Found window.midnight: [${keys.midnightKeys.join(', ')}], window.cardano: [${keys.cardanoKeys.join(', ')}]). If you just installed Lace, please reload this page.`
-        );
-    }
+    walletType: BrowserWalletType;
+    walletName: string;
+    connected: boolean;
+}
 
-    const normalizedNetwork = normalizeMidnightNetworkId(targetNetwork);
-
-    const w = typeof window !== 'undefined' ? (window as any) : null;
-    const detectedWallets = w?.midnight ? Object.entries(w.midnight).map(([k, v]: [string, any]) => ({
-        key: k,
-        name: v?.name,
-        apiVersion: v?.apiVersion,
-        rdns: v?.rdns,
-        hasConnect: typeof v?.connect === 'function',
-        hasIsAuthorized: typeof v?.isAuthorized === 'function',
-    })) : [];
-
-    console.log('[Midnight Lace Connector] Diagnostics:', {
-        requestedNetwork: targetNetwork,
-        normalizedNetwork,
-        detectedWallets,
-        selectedWallet: {
-            name: connector.name,
-            apiVersion: connector.apiVersion,
-            rdns: (connector as any).rdns,
-        },
-    });
-
-    onProgress?.(`Contacting ${connector.name || 'Lace'} on ${normalizedNetwork} network...`);
-
-    let api: any;
-    try {
-        // Prioritize Midnight standard connector.connect(networkId)
-        if (typeof (connector as any).connect === 'function') {
-            console.log(`[Midnight Lace Connector] Authorizing via connector.connect('${normalizedNetwork}')...`);
-            onProgress?.('Lace authorization requested: please enter your password if locked, then click Authorize.');
-            const connectPromise = (connector as any).connect(normalizedNetwork);
-
-            api = await Promise.race([
-                connectPromise,
-                new Promise((_, reject) =>
-                    setTimeout(
-                        () =>
-                            reject(
-                                new Error(
-                                    `Connection request timed out after 3 minutes on network "${normalizedNetwork}". Please check if Lace is unlocked and approve the connection prompt.`
-                                )
-                            ),
-                        180000
-                    )
-                ),
-            ]);
-        } else if (typeof connector.enable === 'function') {
-            console.log('[Midnight Lace Connector] Authorizing via connector.enable()...');
-            onProgress?.('Lace authorization requested: please enter your password if locked, then click Authorize.');
-            api = await Promise.race([
-                connector.enable(),
-                new Promise((_, reject) =>
-                    setTimeout(
-                        () =>
-                            reject(
-                                new Error(
-                                    `Connection request timed out after 3 minutes. Please check if Lace is unlocked and approve the connection prompt.`
-                                )
-                            ),
-                        180000
-                    )
-                ),
-            ]);
-        } else {
-            api = connector;
-        }
-    } catch (err: any) {
-        const errMsg = err?.message || err?.reason || String(err);
-        const errCode = err?.code || '';
-
-        console.error('[Midnight Lace Connector] Connect error:', err);
-
-        if (
-            errCode === 'PermissionRejected' ||
-            errMsg.includes('PermissionRejected') ||
-            errMsg.includes('rejected') ||
-            errMsg.includes('denied') ||
-            errMsg.includes('Access to wallet api denied')
-        ) {
-            throw new Error(
-                'Access to Lace wallet was denied or canceled in the extension prompt.'
-            );
-        }
-        if (errMsg.includes('Invalid network ID') || errMsg.includes('Unsupported network ID')) {
-            throw new Error(
-                `Lace wallet network issue: ${errMsg}. Please ensure your Lace extension is set to the '${normalizedNetwork}' network.`
-            );
-        }
-        if (errMsg.includes('RemoteApiShutdownError') || errMsg.includes('shutdown') || errMsg.includes('can no longer be used') || errMsg.includes('midnight-authenticator')) {
-            throw new Error(
-                'The Lace extension channel was closed because the previous session was interrupted. Please refresh this browser tab (F5) so Lace establishes a fresh connection channel.'
-            );
-        }
-        throw err;
-    }
-
-    console.log('[Midnight Lace Connector] Successfully authorized by Lace! API:', api);
-    onProgress?.('Authorized! Reading account addresses and configuration...');
-
-    // 1. Batch hint usage permissions if supported by Lace (CAIP-372 / v4 standard)
-    if (typeof api.hintUsage === 'function') {
+export function extractAddressString(val: any): string {
+    if (!val) return '';
+    if (typeof val === 'string') return val;
+    if (typeof val === 'object') {
+        if (typeof val.unshieldedAddress === 'string') return val.unshieldedAddress;
+        if (typeof val.address === 'string') return val.address;
+        if (typeof val.shieldedAddress === 'string') return val.shieldedAddress;
+        if (Array.isArray(val) && val.length > 0) return extractAddressString(val[0]);
         try {
-            await withTimeout(
-                api.hintUsage([
-                    'getConfiguration',
-                    'getUnshieldedAddress',
-                    'getShieldedAddresses',
-                    'getDustAddress',
-                    'getUnshieldedBalances',
-                    'getDustBalance',
-                    'getShieldedBalances',
-                ]),
-                1500,
-                undefined
-            );
-        } catch (hintErr) {
-            console.warn('[Midnight Lace Connector] hintUsage note (non-fatal):', hintErr);
-        }
+            if (typeof val.toString === 'function') {
+                const str = val.toString();
+                if (str && str !== '[object Object]') return str;
+            }
+        } catch {}
     }
+    return '';
+}
 
-    function extractAddressString(val: any): string {
-        if (!val) return '';
-        if (typeof val === 'string') return val;
-        if (typeof val === 'object') {
-            if (typeof val.unshieldedAddress === 'string') return val.unshieldedAddress;
-            if (typeof val.address === 'string') return val.address;
-            if (typeof val.shieldedAddress === 'string') return val.shieldedAddress;
-            if (Array.isArray(val) && val.length > 0) return extractAddressString(val[0]);
-            try {
-                if (typeof val.toString === 'function') {
-                    const str = val.toString();
-                    if (str && str !== '[object Object]') return str;
-                }
-            } catch {}
-        }
-        return '';
-    }
-
+export async function queryExtensionAddresses(api: any): Promise<{
+    unshieldedAddress: string;
+    shieldedAddress: string;
+    shieldedCoinPublicKey: string;
+    shieldedEncryptionPublicKey: string;
+}> {
     let unshieldedAddress = '';
     let shieldedAddress = '';
     let shieldedCoinPublicKey = '';
     let shieldedEncryptionPublicKey = '';
-    let networkId = targetNetwork;
 
-    // 2. Query configuration and addresses concurrently in parallel
+    if (!api) return { unshieldedAddress, shieldedAddress, shieldedCoinPublicKey, shieldedEncryptionPublicKey };
+
     try {
-        const [configRes, netIdRes, unshieldedRes, shieldedRes, multiShieldedRes] = await Promise.allSettled([
-            typeof api.getConfiguration === 'function'
-                ? withTimeout(api.getConfiguration(), 2000, null)
-                : Promise.resolve(null),
-            typeof api.getNetworkId === 'function'
-                ? withTimeout(api.getNetworkId(), 2000, null)
-                : Promise.resolve(null),
-            typeof api.getUnshieldedAddress === 'function'
-                ? withTimeout(api.getUnshieldedAddress(), 2000, null)
-                : Promise.resolve(null),
-            typeof api.getShieldedAddress === 'function'
-                ? withTimeout(api.getShieldedAddress(), 2000, null)
-                : Promise.resolve(null),
-            typeof api.getShieldedAddresses === 'function'
-                ? withTimeout(api.getShieldedAddresses(), 2000, null)
-                : Promise.resolve(null),
-        ]);
-
-        if (configRes.status === 'fulfilled' && (configRes.value as any)?.networkId) {
-            networkId = (configRes.value as any).networkId;
-        } else if (netIdRes.status === 'fulfilled' && netIdRes.value) {
-            networkId = String(netIdRes.value);
+        if (typeof api.getUnshieldedAddress === 'function') {
+            const unshieldedRes = await withTimeout<any>(api.getUnshieldedAddress(), 2000, null);
+            if (unshieldedRes) unshieldedAddress = extractAddressString(unshieldedRes);
         }
-
-        if (unshieldedRes.status === 'fulfilled' && unshieldedRes.value) {
-            unshieldedAddress = extractAddressString(unshieldedRes.value);
-        }
-
-        if (multiShieldedRes.status === 'fulfilled' && multiShieldedRes.value) {
-            const val = multiShieldedRes.value as any;
-            if (val.shieldedAddress) shieldedAddress = extractAddressString(val.shieldedAddress);
-            if (val.shieldedCoinPublicKey) shieldedCoinPublicKey = String(val.shieldedCoinPublicKey);
-            if (val.shieldedEncryptionPublicKey) shieldedEncryptionPublicKey = String(val.shieldedEncryptionPublicKey);
-        }
-
-        if (shieldedRes.status === 'fulfilled' && shieldedRes.value) {
-            const sVal = extractAddressString(shieldedRes.value);
-            if (sVal) shieldedAddress = sVal;
-        }
-
-        // Dedicated fallback query for shielded public keys if not yet populated
-        if (!shieldedCoinPublicKey && typeof api.getShieldedAddresses === 'function') {
-            try {
-                const sAddrs: any = await withTimeout(api.getShieldedAddresses(), 2000, null);
-                if (sAddrs) {
-                    if (sAddrs.shieldedAddress && !shieldedAddress) shieldedAddress = extractAddressString(sAddrs.shieldedAddress);
-                    if (sAddrs.shieldedCoinPublicKey) shieldedCoinPublicKey = String(sAddrs.shieldedCoinPublicKey);
-                    if (sAddrs.shieldedEncryptionPublicKey) shieldedEncryptionPublicKey = String(sAddrs.shieldedEncryptionPublicKey);
-                }
-            } catch (sErr) {
-                console.warn('[Midnight Lace Connector] Shielded address lookup fallback warning:', sErr);
+        if (typeof api.getShieldedAddresses === 'function') {
+            const sAddrs = await withTimeout<any>(api.getShieldedAddresses(), 2000, null);
+            const val: any = Array.isArray(sAddrs) ? sAddrs[0] : sAddrs;
+            if (val) {
+                if (val.shieldedAddress) shieldedAddress = extractAddressString(val.shieldedAddress);
+                if (val.shieldedCoinPublicKey) shieldedCoinPublicKey = String(val.shieldedCoinPublicKey);
+                if (val.coinPublicKey && !shieldedCoinPublicKey) shieldedCoinPublicKey = String(val.coinPublicKey);
+                if (val.shieldedEncryptionPublicKey) shieldedEncryptionPublicKey = String(val.shieldedEncryptionPublicKey);
+                if (val.encryptionPublicKey && !shieldedEncryptionPublicKey) shieldedEncryptionPublicKey = String(val.encryptionPublicKey);
             }
+        } else if (typeof api.getShieldedAddress === 'function') {
+            const sRes = await withTimeout<any>(api.getShieldedAddress(), 2000, null);
+            if (sRes) shieldedAddress = extractAddressString(sRes);
         }
 
-        // Quick fallback for legacy mock/object format
         if (!unshieldedAddress && (api.address || api.unshieldedAddress)) {
             unshieldedAddress = extractAddressString(api.unshieldedAddress || api.address);
         }
     } catch (err) {
-        console.warn('[Midnight Lace Connector] Parallel property inspection warning:', err);
+        console.warn(`[Midnight Browser Wallet Connector] Address query warning:`, err);
     }
 
-    const finalAddress = unshieldedAddress || shieldedAddress || 'Connected via Midnight Lace';
-    let balances: ExtensionBalances = {
-        tNightBalance: '0',
-        tNightDisplay: '0',
-        dustBalance: '0',
-        isSynced: true,
-    };
-
-    // 3. Query balances in parallel with quick timeout
-    try {
-        balances = await withTimeout(fetchExtensionWalletBalances(api), 2500, balances);
-    } catch (balErr) {
-        console.warn('[Midnight Lace Connector] Non-fatal balance fetch warning:', balErr);
-    }
-
-    console.log('[Midnight Lace Connector] Connected successfully as:', finalAddress, 'Network:', networkId, {
-        hasShieldedCoinKey: Boolean(shieldedCoinPublicKey),
-        hasShieldedEncKey: Boolean(shieldedEncryptionPublicKey),
-    });
-
-    return {
-        api,
-        address: finalAddress,
-        shieldedAddress,
-        shieldedCoinPublicKey,
-        shieldedEncryptionPublicKey,
-        networkId,
-        balances,
-    };
+    return { unshieldedAddress, shieldedAddress, shieldedCoinPublicKey, shieldedEncryptionPublicKey };
 }
 
-/**
- * Fetches token balances directly from the connected Midnight browser wallet extension.
- * Supports @midnight-ntwrk/dapp-connector-api v4 granular methods (getUnshieldedBalances, getDustBalance, getShieldedBalances)
- * executed in parallel for instant responsiveness.
- */
-export async function fetchExtensionWalletBalances(api: any): Promise<ExtensionBalances> {
-    let tNightBigInt = 0n;
-    let dustBigInt = 0n;
-    let dustCapBigInt: bigint | undefined = undefined;
-    let shieldedBigInt = 0n;
+export async function connectMidnightBrowserWallet(
+    walletType: BrowserWalletType = 'lace',
+    targetNetwork: string = 'preprod',
+    onProgress?: (status: string) => void
+): Promise<ConnectBrowserWalletResult> {
+    const descriptor = SUPPORTED_BROWSER_WALLETS[walletType] || SUPPORTED_BROWSER_WALLETS.lace;
+    const friendlyName = descriptor.name;
 
-    if (!api) {
-        return {
+    if (activeConnectPromise) {
+        console.log(`[Midnight Browser Wallet Connector] Connection already in progress; reusing active promise for ${friendlyName}.`);
+        onProgress?.(`Connecting to ${friendlyName} extension (reusing active request)...`);
+        return activeConnectPromise;
+    }
+
+    const connectExecution = async () => {
+        const connector = getMidnightConnector(walletType);
+        if (!connector) {
+            const keys = getDetectedWalletKeys();
+            throw new Error(
+                `${friendlyName} browser extension was not detected on window.midnight. (Found window.midnight keys: [${keys.midnightKeys.join(', ')}]). If you just installed ${friendlyName}, please reload this page.`
+            );
+        }
+
+        const normalizedNetwork = normalizeMidnightNetworkId(targetNetwork);
+
+        const w = typeof window !== 'undefined' ? (window as any) : null;
+        const detectedWallets = w?.midnight ? Object.entries(w.midnight).map(([k, v]: [string, any]) => ({
+            key: k,
+            name: v?.name,
+            apiVersion: v?.apiVersion,
+            rdns: v?.rdns,
+            hasConnect: typeof v?.connect === 'function',
+            hasIsAuthorized: typeof v?.isAuthorized === 'function',
+        })) : [];
+
+        console.log(`[Midnight Browser Wallet Connector] Diagnostics for ${friendlyName}:`, {
+            requestedWallet: walletType,
+            requestedNetwork: targetNetwork,
+            normalizedNetwork,
+            detectedWallets,
+            selectedWallet: {
+                name: connector.name || friendlyName,
+                apiVersion: connector.apiVersion,
+                rdns: (connector as any).rdns,
+            },
+        });
+
+        const activeName = connector.name || friendlyName;
+        onProgress?.(`Contacting ${activeName} on ${normalizedNetwork} network...`);
+
+        let api: any;
+        const callConnect = async (netArg?: string) => {
+            if (typeof (connector as any).connect === 'function') {
+                return (connector as any).connect(netArg);
+            } else if (typeof connector.enable === 'function') {
+                return connector.enable();
+            } else {
+                return connector;
+            }
+        };
+
+        try {
+            console.log(`[Midnight Browser Wallet Connector] Authorizing via connector.connect('${normalizedNetwork}')...`);
+            onProgress?.(`${activeName} authorization requested: please enter your password if locked, then click Authorize.`);
+
+            try {
+                api = await Promise.race([
+                    callConnect(normalizedNetwork),
+                    new Promise((_, reject) =>
+                        setTimeout(
+                            () =>
+                                reject(
+                                    new Error(
+                                        `Connection request timed out after 3 minutes on network "${normalizedNetwork}". Please check if ${activeName} is unlocked and approve the connection prompt.`
+                                    )
+                                ),
+                            180000
+                        )
+                    ),
+                ]);
+            } catch (firstErr: any) {
+                const firstMsg = firstErr?.message || firstErr?.reason || String(firstErr);
+                // 1AM can return "Request failed" when its background worker is cold or "Network mismatch"
+                if (
+                    walletType === '1am' &&
+                    (firstMsg.includes('Request failed') ||
+                        firstMsg.includes('Network mismatch') ||
+                        firstMsg.includes('Unknown network'))
+                ) {
+                    console.warn(`[Midnight Browser Wallet Connector] First 1AM connect attempt failed (${firstMsg}). Pausing 500ms and retrying with flexible network...`);
+                    onProgress?.(`Contacting 1AM Wallet background worker (waking up extension)...`);
+                    await new Promise((resolve) => setTimeout(resolve, 500));
+                    // 1AM allows omitting networkId to match its active network
+                    api = await callConnect(undefined);
+                } else {
+                    throw firstErr;
+                }
+            }
+        } catch (err: any) {
+            const errMsg = err?.message || err?.reason || String(err);
+            const errCode = err?.code || '';
+
+            console.error(`[Midnight Browser Wallet Connector] Connect error (${activeName}):`, err);
+
+            if (
+                errCode === 'PermissionRejected' ||
+                errMsg.includes('PermissionRejected') ||
+                errMsg.includes('rejected') ||
+                errMsg.includes('denied') ||
+                errMsg.includes('Access to wallet api denied')
+            ) {
+                throw new Error(
+                    `Access to ${activeName} wallet was denied or canceled in the extension prompt.`
+                );
+            }
+            if (isWalletLockedError(err)) {
+                throw new Error(
+                    `Your ${activeName} wallet is locked. Please click the ${activeName} extension icon in your browser toolbar to unlock it with your password, then try connecting again.`
+                );
+            }
+            if (
+                errMsg.includes('Request failed') ||
+                errMsg.includes('Error forwarding message') ||
+                errMsg.includes('No response from wallet background script') ||
+                errCode === 'InternalError'
+            ) {
+                throw new Error(
+                    `Could not establish communication with ${activeName} (${errMsg}). ` +
+                    `The 1AM extension service worker is either asleep, locked, or this tab needs a reload. ` +
+                    `Please click the 1AM icon in your browser toolbar to unlock/wake it, then refresh this page (F5) and click Connect.`
+                );
+            }
+            if (errMsg.includes('Invalid network ID') || errMsg.includes('Unsupported network ID') || errMsg.includes('Network mismatch')) {
+                throw new Error(
+                    `${activeName} wallet network issue: ${errMsg}. Please ensure your ${activeName} extension is set to the '${normalizedNetwork}' network.`
+                );
+            }
+            if (isChannelShutdownError(err) || errMsg.includes('RemoteApiShutdownError') || errMsg.includes('midnight-authenticator')) {
+                throw new Error(
+                    `The ${activeName} extension channel was closed because the previous session was interrupted. Please click the ${activeName} extension icon in your browser toolbar to wake or unlock it, then refresh this page.`
+                );
+            }
+            throw err;
+        }
+
+        console.log(`[Midnight Browser Wallet Connector] Successfully authorized by ${activeName}! API:`, api);
+        onProgress?.('Authorized! Initializing account...');
+
+        // Allow popup window 800ms to cleanly close and finalize internal authorization state before querying
+        await new Promise((resolve) => setTimeout(resolve, 800));
+
+        // 1. Batch hint usage permissions if supported (CAIP-372 / v4 standard)
+        if (typeof api.hintUsage === 'function') {
+            try {
+                await withTimeout(
+                    api.hintUsage([
+                        'getConfiguration',
+                        'getUnshieldedAddress',
+                        'getShieldedAddresses',
+                        'getDustAddress',
+                        'getUnshieldedBalances',
+                        'getDustBalance',
+                        'getShieldedBalances',
+                    ]),
+                    1500,
+                    undefined
+                );
+            } catch (hintErr) {
+                console.warn(`[Midnight Browser Wallet Connector] hintUsage note (non-fatal):`, hintErr);
+            }
+        }
+
+        const queried = await queryExtensionAddresses(api);
+        const unshieldedAddress = queried.unshieldedAddress;
+        const shieldedAddress = queried.shieldedAddress;
+        const shieldedCoinPublicKey = queried.shieldedCoinPublicKey;
+        const shieldedEncryptionPublicKey = queried.shieldedEncryptionPublicKey;
+
+        let networkId = targetNetwork;
+        try {
+            if (typeof api.getConfiguration === 'function') {
+                const configRes = await withTimeout<any>(api.getConfiguration(), 2000, null);
+                if (configRes?.networkId) networkId = String(configRes.networkId);
+            }
+        } catch (err) {
+            console.warn(`[Midnight Browser Wallet Connector] Config query warning:`, err);
+        }
+
+        const finalAddress = unshieldedAddress || shieldedAddress || `Connected via ${activeName}`;
+        let balances: ExtensionBalances = {
             tNightBalance: '0',
             tNightDisplay: '0',
             dustBalance: '0',
             isSynced: true,
         };
+
+        // 3. Query initial balances sequentially
+        try {
+            balances = await withTimeout(fetchExtensionWalletBalances(api), 3500, balances);
+        } catch (balErr) {
+            console.warn(`[Midnight Browser Wallet Connector] Non-fatal initial balance fetch warning:`, balErr);
+        }
+
+        console.log(`[Midnight Browser Wallet Connector] Connected successfully as:`, finalAddress, 'Network:', networkId, {
+            walletType,
+            walletName: activeName,
+            hasShieldedCoinKey: Boolean(shieldedCoinPublicKey),
+            hasShieldedEncKey: Boolean(shieldedEncryptionPublicKey),
+        });
+
+        return {
+            api,
+            address: finalAddress,
+            shieldedAddress,
+            shieldedCoinPublicKey,
+            shieldedEncryptionPublicKey,
+            networkId,
+            balances,
+            walletType,
+            walletName: activeName,
+            connected: true,
+        };
+    };
+
+    activeConnectPromise = connectExecution();
+    try {
+        return await activeConnectPromise;
+    } finally {
+        activeConnectPromise = null;
+    }
+}
+
+/**
+ * Backwards compatibility alias for connecting to Midnight Lace wallet.
+ */
+export async function connectMidnightLaceWallet(
+    targetNetwork: string = 'preprod',
+    onProgress?: (status: string) => void
+): Promise<ConnectBrowserWalletResult> {
+    return connectMidnightBrowserWallet('lace', targetNetwork, onProgress);
+}
+
+/**
+ * Connects specifically to 1AM Midnight wallet extension.
+ */
+export async function connect1AmWallet(
+    targetNetwork: string = 'preprod',
+    onProgress?: (status: string) => void
+): Promise<ConnectBrowserWalletResult> {
+    return connectMidnightBrowserWallet('1am', targetNetwork, onProgress);
+}
+
+/**
+ * Fetches token balances directly from the connected Midnight browser wallet extension.
+ * Supports @midnight-ntwrk/dapp-connector-api v4 granular methods (getUnshieldedBalances, getDustBalance, getShieldedBalances)
+ * executed sequentially with fast bailout on locked keystore.
+ */
+export async function fetchExtensionWalletBalances(api: any): Promise<ExtensionBalances> {
+    if (!api) {
+        return {
+            tNightBalance: '0',
+            tNightDisplay: '0',
+            dustBalance: '0',
+            isSynced: false,
+            isLocked: false,
+            isChannelShutdown: false,
+            errorMessage: 'Extension API not connected',
+        };
     }
 
-    // Execute standard v4 balance queries in parallel
-    try {
-        const [unshieldedBalRes, dustBalRes, shieldedBalRes] = await Promise.allSettled([
-            typeof api.getUnshieldedBalances === 'function'
-                ? withTimeout(api.getUnshieldedBalances(), 2000, null)
-                : Promise.resolve(null),
-            typeof api.getDustBalance === 'function'
-                ? withTimeout(api.getDustBalance(), 2000, null)
-                : Promise.resolve(null),
-            typeof api.getShieldedBalances === 'function'
-                ? withTimeout(api.getShieldedBalances(), 2000, null)
-                : Promise.resolve(null),
-        ]);
+    if (activeFetchBalancesPromise) {
+        return activeFetchBalancesPromise;
+    }
 
-        // 1. Process getUnshieldedBalances
-        if (unshieldedBalRes.status === 'fulfilled' && unshieldedBalRes.value != null) {
-            const raw: any = unshieldedBalRes.value;
-            if (typeof raw === 'bigint') {
-                tNightBigInt = raw;
-            } else if (typeof raw === 'number' || typeof raw === 'string') {
-                try { tNightBigInt = BigInt(raw); } catch {}
-            } else if (typeof raw === 'object') {
-                const entries = raw instanceof Map ? Array.from(raw.entries()) : Object.entries(raw);
+    const fetchExecution = async (): Promise<ExtensionBalances> => {
+        let tNightBigInt = 0n;
+        let dustBigInt = 0n;
+        let dustCapBigInt: bigint | undefined = undefined;
+        let shieldedBigInt = 0n;
+
+        const queryErrors: any[] = [];
+        const safeQuery = async <T>(
+            fn: () => Promise<T> | T,
+            ms: number,
+            opName: string
+        ): Promise<T | null> => {
+            try {
+                const p = Promise.resolve().then(() => fn());
+                let timer: any = null;
+                const timeoutP = new Promise<never>((_, reject) => {
+                    timer = setTimeout(() => {
+                        reject(new Error(`${opName} timed out after ${ms}ms.`));
+                    }, ms);
+                });
+                const res = await Promise.race([p, timeoutP]);
+                clearTimeout(timer);
+                return res;
+            } catch (err: any) {
+                queryErrors.push(err);
+                if (isChannelShutdownError(err)) {
+                    console.warn(`[Midnight Lace Connector] ${opName} channel shutdown detected:`, err?.message || err);
+                } else if (isWalletLockedError(err)) {
+                    console.warn(`[Midnight Lace Connector] ${opName} detected wallet lock:`, err?.message || err);
+                } else {
+                    console.warn(`[Midnight Lace Connector] ${opName} error:`, err);
+                }
+                return null;
+            }
+        };
+
+        // 1. Process getUnshieldedBalances sequentially
+        let unshieldedRaw = null;
+        if (typeof api.getUnshieldedBalances === 'function') {
+            unshieldedRaw = await safeQuery(() => api.getUnshieldedBalances(), 4000, 'getUnshieldedBalances');
+        } else if (typeof api.getUnshieldedBalance === 'function') {
+            unshieldedRaw = await safeQuery(() => api.getUnshieldedBalance(), 4000, 'getUnshieldedBalance');
+        }
+
+        // Fast bailout if wallet is locked or channel is shut down - do NOT continue hammering extension
+        if (queryErrors.some(isWalletLockedError)) {
+            console.warn('[Midnight Lace Connector] Aborting remaining balance queries: wallet is locked.');
+            return {
+                tNightBalance: '0',
+                tNightDisplay: '0',
+                dustBalance: '0',
+                isSynced: false,
+                isLocked: true,
+                isChannelShutdown: false,
+                errorMessage: 'Your Lace wallet is locked. Please unlock it in the Lace extension toolbar.',
+            };
+        }
+        if (queryErrors.some(isChannelShutdownError)) {
+            console.warn('[Midnight Lace Connector] Aborting remaining balance queries: channel is shutdown.');
+            return {
+                tNightBalance: '0',
+                tNightDisplay: '0',
+                dustBalance: '0',
+                isSynced: false,
+                isLocked: false,
+                isChannelShutdown: true,
+                errorMessage: 'Lace extension background channel was shutdown: object can no longer be used. Please refresh session.',
+            };
+        }
+
+        if (unshieldedRaw != null) {
+            if (typeof unshieldedRaw === 'bigint') {
+                tNightBigInt = unshieldedRaw;
+            } else if (typeof unshieldedRaw === 'number' || typeof unshieldedRaw === 'string') {
+                try { tNightBigInt = BigInt(unshieldedRaw); } catch {}
+            } else if (typeof unshieldedRaw === 'object') {
+                const entries = unshieldedRaw instanceof Map ? Array.from(unshieldedRaw.entries()) : Object.entries(unshieldedRaw);
                 for (const [, val] of entries) {
                     if (typeof val === 'bigint') {
                         tNightBigInt += val;
@@ -493,37 +750,62 @@ export async function fetchExtensionWalletBalances(api: any): Promise<ExtensionB
             }
         }
 
-        // 2. Process getDustBalance
-        if (dustBalRes.status === 'fulfilled' && dustBalRes.value != null) {
-            const raw: any = dustBalRes.value;
-            if (typeof raw === 'bigint') {
-                dustBigInt = raw;
-            } else if (typeof raw === 'number' || typeof raw === 'string') {
-                try { dustBigInt = BigInt(raw); } catch {}
-            } else if (typeof raw === 'object') {
-                if (raw.balance !== undefined && raw.balance !== null) {
-                    dustBigInt = typeof raw.balance === 'bigint' ? raw.balance : BigInt(raw.balance.toString());
-                } else if (raw.dust !== undefined && raw.dust !== null) {
-                    dustBigInt = typeof raw.dust === 'bigint' ? raw.dust : BigInt(raw.dust.toString());
-                } else if (raw.value !== undefined && raw.value !== null) {
-                    dustBigInt = typeof raw.value === 'bigint' ? raw.value : BigInt(raw.value.toString());
-                } else if (raw.amount !== undefined && raw.amount !== null) {
-                    dustBigInt = typeof raw.amount === 'bigint' ? raw.amount : BigInt(raw.amount.toString());
+        // 2. Process getDustBalance sequentially
+        let dustRaw = null;
+        if (typeof api.getDustBalance === 'function') {
+            dustRaw = await safeQuery(() => api.getDustBalance(), 4000, 'getDustBalance');
+        } else if (typeof api.getDustBalances === 'function') {
+            dustRaw = await safeQuery(() => api.getDustBalances(), 4000, 'getDustBalances');
+        }
+
+        if (queryErrors.some(isWalletLockedError)) {
+            console.warn('[Midnight Lace Connector] Aborting remaining balance queries: wallet is locked.');
+            return {
+                tNightBalance: '0',
+                tNightDisplay: '0',
+                dustBalance: '0',
+                isSynced: false,
+                isLocked: true,
+                isChannelShutdown: false,
+                errorMessage: 'Your Lace wallet is locked. Please unlock it in the Lace extension toolbar.',
+            };
+        }
+
+        if (dustRaw != null) {
+            if (typeof dustRaw === 'bigint') {
+                dustBigInt = dustRaw;
+            } else if (typeof dustRaw === 'number' || typeof dustRaw === 'string') {
+                try { dustBigInt = BigInt(dustRaw); } catch {}
+            } else if (typeof dustRaw === 'object') {
+                if (dustRaw.balance !== undefined && dustRaw.balance !== null) {
+                    dustBigInt = typeof dustRaw.balance === 'bigint' ? dustRaw.balance : BigInt(dustRaw.balance.toString());
+                } else if (dustRaw.dust !== undefined && dustRaw.dust !== null) {
+                    dustBigInt = typeof dustRaw.dust === 'bigint' ? dustRaw.dust : BigInt(dustRaw.dust.toString());
+                } else if (dustRaw.value !== undefined && dustRaw.value !== null) {
+                    dustBigInt = typeof dustRaw.value === 'bigint' ? dustRaw.value : BigInt(dustRaw.value.toString());
+                } else if (dustRaw.amount !== undefined && dustRaw.amount !== null) {
+                    dustBigInt = typeof dustRaw.amount === 'bigint' ? dustRaw.amount : BigInt(dustRaw.amount.toString());
                 }
 
-                if (raw.cap !== undefined && raw.cap !== null) {
-                    dustCapBigInt = typeof raw.cap === 'bigint' ? raw.cap : BigInt(raw.cap.toString());
+                if (dustRaw.cap !== undefined && dustRaw.cap !== null) {
+                    dustCapBigInt = typeof dustRaw.cap === 'bigint' ? dustRaw.cap : BigInt(dustRaw.cap.toString());
                 }
             }
         }
 
-        // 3. Process getShieldedBalances
-        if (shieldedBalRes.status === 'fulfilled' && shieldedBalRes.value != null) {
-            const raw: any = shieldedBalRes.value;
-            if (typeof raw === 'bigint') {
-                shieldedBigInt = raw;
-            } else if (typeof raw === 'object') {
-                const entries = raw instanceof Map ? Array.from(raw.entries()) : Object.entries(raw);
+        // 3. Process getShieldedBalances sequentially
+        let shieldedRaw = null;
+        if (typeof api.getShieldedBalances === 'function') {
+            shieldedRaw = await safeQuery(() => api.getShieldedBalances(), 4000, 'getShieldedBalances');
+        } else if (typeof api.getShieldedBalance === 'function') {
+            shieldedRaw = await safeQuery(() => api.getShieldedBalance(), 4000, 'getShieldedBalance');
+        }
+
+        if (shieldedRaw != null) {
+            if (typeof shieldedRaw === 'bigint') {
+                shieldedBigInt = shieldedRaw;
+            } else if (typeof shieldedRaw === 'object') {
+                const entries = shieldedRaw instanceof Map ? Array.from(shieldedRaw.entries()) : Object.entries(shieldedRaw);
                 for (const [, val] of entries) {
                     if (typeof val === 'bigint') {
                         shieldedBigInt += val;
@@ -533,57 +815,70 @@ export async function fetchExtensionWalletBalances(api: any): Promise<ExtensionB
                 }
             }
         }
-    } catch (err) {
-        console.warn('[Midnight Lace Connector] Parallel balances error:', err);
-    }
 
-    // Quick fallback to getBalances() if unshielded was not found
-    if (tNightBigInt === 0n && typeof api.getBalances === 'function') {
-        try {
-            const raw: any = await withTimeout(api.getBalances(), 1500, null);
-            if (raw) {
-                if (raw.tNight !== undefined) tNightBigInt = BigInt(raw.tNight.toString());
-                if (raw.unshielded !== undefined) tNightBigInt = BigInt(raw.unshielded.toString());
-                if (raw.dust !== undefined && dustBigInt === 0n) dustBigInt = BigInt(raw.dust.toString());
+        // Quick fallback to getBalances() if unshielded was not found and no error occurred
+        if (queryErrors.length === 0 && tNightBigInt === 0n && typeof api.getBalances === 'function') {
+            try {
+                const raw: any = await safeQuery(() => api.getBalances(), 2000, 'getBalances');
+                if (raw) {
+                    if (raw.tNight !== undefined) tNightBigInt = BigInt(raw.tNight.toString());
+                    if (raw.unshielded !== undefined) tNightBigInt = BigInt(raw.unshielded.toString());
+                    if (raw.dust !== undefined && dustBigInt === 0n) dustBigInt = BigInt(raw.dust.toString());
+                }
+            } catch (err) {
+                console.warn('[Midnight Lace Connector] getBalances fallback error:', err);
             }
-        } catch (err) {
-            console.warn('[Midnight Lace Connector] getBalances fallback error:', err);
         }
-    }
 
-    const formattedTNight = (Number(tNightBigInt) / 1_000_000).toLocaleString(undefined, {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 6,
-    });
-
-    // In Midnight, 1 DUST = 10^15 SPECK. If the balance is in base units (SPECK >= 10^9),
-    // convert it to human-readable DUST units (divide by 10^15).
-    const dustUnits = dustBigInt >= 1_000_000_000n ? Number(dustBigInt) / 1e15 : Number(dustBigInt);
-    const formattedDust = dustUnits.toLocaleString(undefined, {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 4,
-    });
-
-    const dustCapUnits = dustCapBigInt !== undefined
-        ? (dustCapBigInt >= 1_000_000_000n ? Number(dustCapBigInt) / 1e15 : Number(dustCapBigInt))
-        : undefined;
-    const formattedDustCap = dustCapUnits !== undefined
-        ? dustCapUnits.toLocaleString(undefined, {
+        const formattedTNight = (Number(tNightBigInt) / 1_000_000).toLocaleString(undefined, {
             minimumFractionDigits: 0,
-            maximumFractionDigits: 2,
-        })
-        : undefined;
+            maximumFractionDigits: 6,
+        });
 
-    return {
-        tNightBalance: tNightBigInt.toString(),
-        tNightDisplay: formattedTNight,
-        dustBalance: dustBigInt.toString(),
-        dustDisplay: formattedDust,
-        dustCap: dustCapBigInt !== undefined ? dustCapBigInt.toString() : undefined,
-        dustCapDisplay: formattedDustCap,
-        shieldedBalance: shieldedBigInt.toString(),
-        isSynced: true,
+        const dustUnits = dustBigInt >= 1_000_000_000n ? Number(dustBigInt) / 1e15 : Number(dustBigInt);
+        const formattedDust = dustUnits.toLocaleString(undefined, {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 4,
+        });
+
+        const dustCapUnits = dustCapBigInt !== undefined
+            ? (dustCapBigInt >= 1_000_000_000n ? Number(dustCapBigInt) / 1e15 : Number(dustCapBigInt))
+            : undefined;
+        const formattedDustCap = dustCapUnits !== undefined
+            ? dustCapUnits.toLocaleString(undefined, {
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 2,
+            })
+            : undefined;
+
+        const isLocked = queryErrors.some(isWalletLockedError);
+        const isChannelShutdown = queryErrors.some(isChannelShutdownError);
+
+        return {
+            tNightBalance: tNightBigInt.toString(),
+            tNightDisplay: formattedTNight,
+            dustBalance: dustBigInt.toString(),
+            dustDisplay: formattedDust,
+            dustCap: dustCapBigInt !== undefined ? dustCapBigInt.toString() : undefined,
+            dustCapDisplay: formattedDustCap,
+            shieldedBalance: shieldedBigInt.toString(),
+            isSynced: !isLocked && !isChannelShutdown,
+            isLocked,
+            isChannelShutdown,
+            errorMessage: isLocked
+                ? 'Your Lace wallet is locked. Please unlock it in the Lace extension toolbar.'
+                : isChannelShutdown
+                ? 'Lace extension background channel was shutdown: object can no longer be used. Please refresh session.'
+                : null,
+        };
     };
+
+    activeFetchBalancesPromise = fetchExecution();
+    try {
+        return await activeFetchBalancesPromise;
+    } finally {
+        activeFetchBalancesPromise = null;
+    }
 }
 
 /**
@@ -715,18 +1010,19 @@ function hexToUint8Array(hex: string): Uint8Array {
 export async function balanceAndSubmitLaceTx(
     api: MidnightConnectedApi,
     unsealedTxHex: string,
-    onProgress?: (msg: string) => void
+    onProgress?: (msg: string) => void,
+    walletName: string = 'Lace'
 ): Promise<{ txHash: string; balancedTxHex: string }> {
     if (!api) {
-        throw new Error('Midnight Lace wallet extension is not connected.');
+        throw new Error(`Midnight ${walletName} wallet extension is not connected.`);
     }
 
     if (typeof api.balanceUnsealedTransaction !== 'function') {
-        throw new Error('Connected wallet does not support balanceUnsealedTransaction. Please update your Lace extension to the latest version.');
+        throw new Error(`Connected wallet does not support balanceUnsealedTransaction. Please update your ${walletName} extension to the latest version.`);
     }
 
-    onProgress?.('Prompting Lace for DUST fee payment and transaction signature...');
-    console.log('[Midnight Lace Connector] Calling api.balanceUnsealedTransaction...');
+    onProgress?.(`Prompting ${walletName} for DUST fee payment and transaction signature...`);
+    console.log(`[Midnight ${walletName} Connector] Calling api.balanceUnsealedTransaction...`);
 
     let balancedResult: any;
     let balanceError: any = null;
@@ -811,14 +1107,15 @@ export async function balanceAndSubmitLaceTx(
         console.warn('[Midnight Lace Connector] Could not extract txHash from balanced tx:', extractErr);
     }
 
-    onProgress?.('Broadcasting balanced transaction to Midnight network via Lace...');
-    console.log('[Midnight Lace Connector] Calling api.submitTransaction...');
+    onProgress?.(`Broadcasting balanced transaction to Midnight network via ${walletName}...`);
+    console.log(`[Midnight ${walletName} Connector] Calling api.submitTransaction...`);
 
     let laceSubmitted = false;
     let laceBroadcastErr: any = null;
 
     if (typeof api.submitTransaction === 'function') {
         try {
+            onProgress?.(`Submitting balanced transaction via ${walletName}...`);
             const res = await api.submitTransaction(balancedTxHex);
             // In Midnight DApp Connector spec, submitTransaction returns Promise<void>.
             // If it returned a custom string id, preserve it.
@@ -826,7 +1123,7 @@ export async function balanceAndSubmitLaceTx(
                 txHash = res.trim();
             }
             laceSubmitted = true;
-            console.log('[Midnight Lace Connector] Transaction successfully submitted via Lace! TxHash:', txHash);
+            console.log(`[Midnight ${walletName} Connector] Transaction successfully submitted via ${walletName}! TxHash:`, txHash);
         } catch (submitErr: any) {
             laceBroadcastErr = submitErr;
             const errStr = formatLaceError(submitErr) || String(submitErr?.message || submitErr);
@@ -838,10 +1135,10 @@ export async function balanceAndSubmitLaceTx(
                 errStr.toLowerCase().includes('duplicate');
 
             if (isAlreadySubmitted) {
-                console.log('[Midnight Lace Connector] Transaction was already accepted by the node:', errStr);
+                console.log(`[Midnight ${walletName} Connector] Transaction was already accepted by the node:`, errStr);
                 laceSubmitted = true;
             } else {
-                console.warn('[Midnight Lace Connector] Lace api.submitTransaction failed, checking fallback...', {
+                console.warn(`[Midnight ${walletName} Connector] ${walletName} api.submitTransaction failed, checking fallback...`, {
                     err: submitErr,
                     formatted: errStr,
                 });
@@ -852,7 +1149,7 @@ export async function balanceAndSubmitLaceTx(
     // Fallback: If Lace submitTransaction failed or was unavailable, broadcast via Studio backend Midnight Node RPC
     if (!laceSubmitted) {
         onProgress?.('Broadcasting transaction via Studio Node RPC fallback...');
-        console.log('[Midnight Lace Connector] Broadcasting balanced transaction via /api/contract/broadcast...');
+        console.log(`[Midnight ${walletName} Connector] Broadcasting balanced transaction via /api/contract/broadcast...`);
         try {
             const broadcastRes = await fetch('/api/contract/broadcast', {
                 method: 'POST',
@@ -863,12 +1160,12 @@ export async function balanceAndSubmitLaceTx(
             if (broadcastRes.ok && broadcastJson.success && broadcastJson.data?.txHash) {
                 txHash = broadcastJson.data.txHash;
                 laceSubmitted = true;
-                console.log('[Midnight Lace Connector] Transaction successfully broadcasted via backend Node RPC! TxHash:', txHash);
+                console.log(`[Midnight ${walletName} Connector] Transaction successfully broadcasted via backend Node RPC! TxHash:`, txHash);
             } else {
                 const nodeMsg = broadcastJson.error || '';
-                console.error('[Midnight Lace Connector] Backend Node broadcast also rejected transaction:', nodeMsg);
+                console.error(`[Midnight ${walletName} Connector] Backend Node broadcast also rejected transaction:`, nodeMsg);
                 if (laceBroadcastErr) {
-                    throw new Error(`Broadcast failed via Lace (${formatLaceError(laceBroadcastErr)}) and Node RPC: ${nodeMsg}`);
+                    throw new Error(`Broadcast failed via ${walletName} (${formatLaceError(laceBroadcastErr)}) and Node RPC: ${nodeMsg}`);
                 }
                 throw new Error(`Failed to broadcast transaction: ${nodeMsg || 'Node rejected extrinsic'}`);
             }
@@ -877,7 +1174,7 @@ export async function balanceAndSubmitLaceTx(
                 throw fbErr;
             }
             if (laceBroadcastErr) {
-                throw new Error(`Failed to broadcast transaction via Lace: ${formatLaceError(laceBroadcastErr)}`);
+                throw new Error(`Failed to broadcast transaction via ${walletName}: ${formatLaceError(laceBroadcastErr)}`);
             }
             throw fbErr;
         }
@@ -885,4 +1182,25 @@ export async function balanceAndSubmitLaceTx(
 
     return { txHash: txHash || `tx-${Date.now()}`, balancedTxHex };
 }
+
+export const balanceAndSubmitBrowserWalletTx = balanceAndSubmitLaceTx;
+
+export function formatBrowserWalletError(err: any, wallet?: BrowserWalletType | string): string {
+    const raw = formatLaceError(err);
+    const friendlyName = wallet === '1am' ? '1AM Wallet' : wallet === 'lace' ? 'Midnight Lace' : (wallet || 'wallet');
+    const lower = raw.toLowerCase();
+    if (
+        lower.includes('reject') ||
+        lower.includes('denied') ||
+        lower.includes('canceled') ||
+        lower.includes('permissionrejected')
+    ) {
+        return `Connection request was declined in ${friendlyName}.`;
+    }
+    if (lower.includes('request failed') || lower.includes('error forwarding message')) {
+        return `Could not communicate with ${friendlyName}. Please click the ${friendlyName} icon in your browser toolbar to unlock or wake it, then refresh this page (F5).`;
+    }
+    return raw;
+}
+
 

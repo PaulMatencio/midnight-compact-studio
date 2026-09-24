@@ -71,6 +71,30 @@ export const InfrastructureSettingsModal: React.FC<InfrastructureSettingsModalPr
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
+  const probeProverClientSide = async (targetUrl?: string) => {
+    const proverUrl = targetUrl || config?.prover?.url || 'http://127.0.0.1:6300';
+    const startTime = performance.now();
+    try {
+      const res = await fetch(proverUrl, {
+        method: 'GET',
+        signal: AbortSignal.timeout(2500),
+      });
+      const latencyMs = Math.round(performance.now() - startTime);
+      if (res.status === 200 || res.status === 404 || res.status === 405) {
+        return {
+          status: 'online',
+          httpStatus: res.status,
+          latencyMs,
+          url: proverUrl,
+          message: `Prover server reachable directly from browser (${latencyMs}ms, HTTP ${res.status})`,
+        };
+      }
+    } catch {
+      // client probe failed
+    }
+    return null;
+  };
+
   const runTest = async (action: 'test_prover' | 'test_indexer' | 'test_redis' | 'test_files') => {
     setIsTesting((prev) => ({ ...prev, [action]: true }));
     try {
@@ -81,12 +105,23 @@ export const InfrastructureSettingsModal: React.FC<InfrastructureSettingsModalPr
       });
       const data = await res.json();
       if (data.success && data.data) {
-        setTestResults((prev) => ({ ...prev, [action]: data.data }));
+        let result = data.data;
+        // If server-side check failed, attempt direct browser-to-prover check
+        if (action === 'test_prover' && result.status !== 'online') {
+          const direct = await probeProverClientSide();
+          if (direct) result = direct;
+        }
+        setTestResults((prev) => ({ ...prev, [action]: result }));
       }
     } catch (err: any) {
+      let fallbackResult: any = { status: 'offline', message: err.message };
+      if (action === 'test_prover') {
+        const direct = await probeProverClientSide();
+        if (direct) fallbackResult = direct;
+      }
       setTestResults((prev) => ({
         ...prev,
-        [action]: { status: 'offline', message: err.message },
+        [action]: fallbackResult,
       }));
     } finally {
       setIsTesting((prev) => ({ ...prev, [action]: false }));
@@ -103,8 +138,13 @@ export const InfrastructureSettingsModal: React.FC<InfrastructureSettingsModalPr
       });
       const data = await res.json();
       if (data.success && data.data) {
+        let proverResult = data.data.prover;
+        if (proverResult?.status !== 'online') {
+          const direct = await probeProverClientSide();
+          if (direct) proverResult = direct;
+        }
         setTestResults({
-          test_prover: data.data.prover,
+          test_prover: proverResult,
           test_indexer: data.data.indexer,
           test_redis: data.data.redis,
           test_files: data.data.files,

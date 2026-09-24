@@ -14,5 +14,5 @@ export interface IWalletGateway {
     sendUnshieldedTransfer(seed: string, receiver: string, amount: string): Promise<TransferExecutionReceipt>;
     deriveKeys(seed: string): Promise<KeyDerivationResult>;
     evictWallet(seed: string): void;
-    clearStoredState(seed: string): Promise<void>;
+    clearStoredState(seed: string, target?: 'all' | 'dust'): Promise<void>;
 }

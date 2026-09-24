@@ -5,135 +5,107 @@
  *   npx tsx examples/fungible-token-v2-4-example.ts
  */
 
-import * as CompactRuntime from '@midnight-ntwrk/compact-runtime';
-import type {
-  ConstructorContext,
-  CircuitContext
+import {
+  CompactRuntime,
+  type CircuitContext,
+  type ConstructorContext,
 } from '@midnight-ntwrk/compact-runtime';
 import {
   FungibleTokenV24Client,
-  type FungibleTokenV24PrivateState
+  type FungibleTokenV24PrivateState,
 } from '../src/client/fungible-token-v2-4-sdk.js';
 
-async function main(): Promise<void> {
-  console.log('=== Initializing FungibleToken v2.4 Walkthrough ===');
+async function main() {
+  console.log('--- 1. Initializing Cryptographic Context & Secrets ---');
+  const contractSalt = new Uint8Array(32);
+  contractSalt.fill(0xaa);
 
-  // 1. Setup Identities and Constants (32-byte hex strings)
-  const coinPublicKey = '01'.repeat(32);
-  const contractAddress = '00'.repeat(32);
-  const salt = '11'.repeat(32);
+  const ownerSK = new Uint8Array(32);
+  ownerSK.fill(0x01);
 
-  const ownerSecretKey = new Uint8Array(32).fill(0xaa);
-  const aliceSecretKey = new Uint8Array(32).fill(0xbb);
+  const aliceSK = new Uint8Array(32);
+  aliceSK.fill(0x02);
 
-  // Derive account commitments
-  const ownerAccount = FungibleTokenV24Client.deriveAccount(ownerSecretKey, salt);
-  const aliceAccount = FungibleTokenV24Client.deriveAccount(aliceSecretKey, salt);
+  const ownerAccount = FungibleTokenV24Client.deriveAccount(ownerSK, contractSalt);
+  const aliceAccount = FungibleTokenV24Client.deriveAccount(aliceSK, contractSalt);
 
   console.log('Owner Account Commitment:', Buffer.from(ownerAccount).toString('hex'));
   console.log('Alice Account Commitment:', Buffer.from(aliceAccount).toString('hex'));
 
-  // Multi-sig signer commitments (initialSigners: Vector<3, Bytes<32>>)
-  const signer1 = new Uint8Array(32).fill(0x01);
-  const signer2 = new Uint8Array(32).fill(0x02);
-  const signer3 = new Uint8Array(32).fill(0x03);
+  // Multi-sig signer place-holders (3 initial registered signers)
+  const signer1 = new Uint8Array(32).fill(0x11);
+  const signer2 = new Uint8Array(32).fill(0x22);
+  const signer3 = new Uint8Array(32).fill(0x33);
 
-  // 2. Initialize Private State & Witnesses
-  const initialPrivateState: FungibleTokenV24PrivateState = {
-    secretKey: ownerSecretKey
-  };
+  console.log('\n--- 2. Instantiating SDK & Deploying Contract Initial State ---');
+  let currentOwnerPrivateState: FungibleTokenV24PrivateState = { secretKey: ownerSK };
+  const witnesses = FungibleTokenV24Client.createWitnesses(ownerSK);
+  const sdk = new FungibleTokenV24Client(witnesses, contractSalt);
 
-  const witnesses = FungibleTokenV24Client.createWitnesses(ownerSecretKey);
-  const client = new FungibleTokenV24Client(witnesses, salt);
+  // Addresses in Midnight.js runtime are 32-byte hex strings
+  const coinPublicKey = '01'.repeat(32);
+  const contractAddress = '00'.repeat(32);
 
-  // 3. Deploy / Run Constructor
-  const constructorCtx: ConstructorContext<FungibleTokenV24PrivateState> =
-    CompactRuntime.createConstructorContext(initialPrivateState, coinPublicKey);
+  const constructorContext: ConstructorContext<FungibleTokenV24PrivateState> =
+    CompactRuntime.createConstructorContext(currentOwnerPrivateState, coinPublicKey);
 
-  const name = 'Privacy Governance Token';
-  const symbol = 'PGT';
-  const decimals = 18n;
-  const maxSupply = 1_000_000_000n * 10n ** 18n;
-  const initialSigners = [signer1, signer2, signer3];
-  const threshold = 2n;
-
-  console.log('Executing contract constructor...');
-  const initResult = client.initialState(
-    constructorCtx,
-    FungibleTokenV24Client.toBytes32(salt),
+  const initResult = sdk.initialState(
+    constructorContext,
+    contractSalt,
     ownerAccount,
-    name,
-    symbol,
-    decimals,
-    maxSupply,
-    initialSigners,
-    threshold
+    'Shielded Token',
+    'SHIELD',
+    18n,
+    1_000_000n * 10n ** 18n,
+    [signer1, signer2, signer3],
+    2n
   );
 
-  // Track on-chain state transitions
   let currentChargedState = initResult.currentContractState.data;
-  let privateState = initResult.currentPrivateState;
+  currentOwnerPrivateState = initResult.currentPrivateState;
 
-  // Inspect deployment ledger state
-  let currentLedger = client.queryLedgerStateFromRaw(currentChargedState);
-  console.log('Token Initialized:');
-  console.log(' - Name:', currentLedger._name);
-  console.log(' - Symbol:', currentLedger._symbol);
-  console.log(' - Total Supply:', currentLedger._totalSupply.toString());
-  console.log(' - Multisig Threshold:', currentLedger._multisigThreshold.toString());
+  let ledgerView = sdk.queryLedgerState(currentChargedState);
+  console.log('Contract Initialized:');
+  console.log('- Total Supply:', ledgerView._totalSupply);
+  console.log('- Multisig Threshold:', ledgerView._multisigThreshold);
+  console.log('- Multisig Signer Count:', ledgerView._multisigSignerCount);
+  console.log('- Is Paused:', ledgerView._paused);
 
-  // 4. Create Circuit Context for Transaction Execution
-  let circuitCtx: CircuitContext<FungibleTokenV24PrivateState> =
+  console.log('\n--- 3. Direct State Execution: Pause Circuit ---');
+  let circuitContext: CircuitContext<FungibleTokenV24PrivateState> =
     CompactRuntime.createCircuitContext(
       contractAddress,
       coinPublicKey,
       currentChargedState,
-      privateState
+      currentOwnerPrivateState
     );
 
-  // 5. Test Pausing the Contract (Owner authorization)
-  console.log('\nExecuting emergency pause...');
-  const pauseResult = client.pause(circuitCtx, ownerAccount);
-
-  // Update tracking state
+  const pauseResult = sdk.pause(circuitContext, ownerAccount);
   currentChargedState = pauseResult.context.currentQueryContext.state;
-  privateState = pauseResult.context.currentPrivateState;
-  currentLedger = client.queryLedgerStateFromRaw(currentChargedState);
-  console.log(' - Contract Paused State:', currentLedger._paused);
+  currentOwnerPrivateState = pauseResult.context.currentPrivateState;
 
-  // 6. Test Unpausing the Contract
-  console.log('Executing unpause...');
-  circuitCtx = CompactRuntime.createCircuitContext(
+  ledgerView = sdk.queryLedgerState(currentChargedState);
+  console.log('State after pause(): _paused =', ledgerView._paused);
+
+  console.log('\n--- 4. Unpausing Contract ---');
+  circuitContext = CompactRuntime.createCircuitContext(
     contractAddress,
     coinPublicKey,
     currentChargedState,
-    privateState
+    currentOwnerPrivateState
   );
 
-  const unpauseResult = client.unpause(circuitCtx, ownerAccount);
+  const unpauseResult = sdk.unpause(circuitContext, ownerAccount);
   currentChargedState = unpauseResult.context.currentQueryContext.state;
-  privateState = unpauseResult.context.currentPrivateState;
-  currentLedger = client.queryLedgerStateFromRaw(currentChargedState);
-  console.log(' - Contract Paused State after reset:', currentLedger._paused);
+  currentOwnerPrivateState = unpauseResult.context.currentPrivateState;
 
-  // 7. Query Multi-Sig State from Public Ledger
-  console.log('\nQuerying Multi-Sig Ledger State...');
-  const nonce = client.getMultisigNonce(currentLedger);
-  const multisigThreshold = client.getMultisigThreshold(currentLedger);
-  const signerCount = client.getMultisigSignerCount(currentLedger);
-  const isSigner1 = client.isMultisigSigner(currentLedger, signer1);
-  const isUnknownSigner = client.isMultisigSigner(currentLedger, new Uint8Array(32).fill(0xff));
+  ledgerView = sdk.queryLedgerState(currentChargedState);
+  console.log('State after unpause(): _paused =', ledgerView._paused);
 
-  console.log(' - Multisig Nonce:', nonce.toString());
-  console.log(' - Multisig Threshold:', multisigThreshold.toString());
-  console.log(' - Multisig Signer Count:', signerCount.toString());
-  console.log(' - Signer 1 Registered?:', isSigner1);
-  console.log(' - Unknown Signer Registered?:', isUnknownSigner);
-
-  console.log('\nWalkthrough completed successfully.');
+  console.log('\n--- Quickstart Walkthrough Complete ---');
 }
 
 main().catch((err) => {
-  console.error('Walkthrough execution failed:', err);
+  console.error('Execution failed:', err);
   process.exit(1);
 });

@@ -596,31 +596,71 @@ export class MidnightContractAdapter implements IContractGateway {
 
                 if (elemType.includes('Bytes') || elemType.includes('Uint8Array') || cleanName.toLowerCase().includes('signers')) {
                     const signers: Uint8Array[] = [];
+                    const parseSignerStr = (strVal: string) => {
+                        // Strip leading/trailing brackets, quotes, commas, and whitespace
+                        const trimmed = strVal.replace(/^['"\[\s]+/, '').replace(/['"\]\s,]+$/, '').trim();
+                        if (!trimmed) return;
+                        const cleanHex = trimmed.replace(/^0x/, '');
+                        if (/^[0-9a-fA-F]{64}$/.test(cleanHex)) {
+                            signers.push(new Uint8Array(Buffer.from(cleanHex, 'hex')));
+                        } else if (trimmed.startsWith('mn_') || trimmed.startsWith('midnight')) {
+                            try {
+                                const decoded = MidnightBech32m.parse(trimmed).decode(UnshieldedAddress, getNetworkId());
+                                if (decoded.data && decoded.data.length === 32) {
+                                    signers.push(new Uint8Array(decoded.data));
+                                }
+                            } catch {
+                                // ignore invalid address string
+                            }
+                        }
+                    };
+
                     if (Array.isArray(userVal)) {
                         for (const item of userVal) {
                             if (item instanceof Uint8Array && item.length === 32) {
                                 signers.push(item);
-                            } else if (typeof item === 'string' && /^[0-9a-fA-F]{64}$/.test(item.replace(/^0x/, ''))) {
-                                signers.push(new Uint8Array(Buffer.from(item.replace(/^0x/, ''), 'hex')));
+                            } else if (typeof item === 'string') {
+                                parseSignerStr(item);
                             }
                         }
                     } else if (typeof userVal === 'string' && userVal.trim()) {
-                        const parts = userVal.split(/[\s,]+/).map((s) => s.trim().replace(/^0x/, '')).filter(Boolean);
-                        for (const part of parts) {
-                            if (/^[0-9a-fA-F]{64}$/.test(part)) {
-                                signers.push(new Uint8Array(Buffer.from(part, 'hex')));
+                        let jsonArray: any = null;
+                        if (userVal.trim().startsWith('[')) {
+                            try {
+                                jsonArray = JSON.parse(userVal);
+                            } catch {
+                                // not strict JSON, fallback to splitting
+                            }
+                        }
+
+                        if (Array.isArray(jsonArray)) {
+                            for (const item of jsonArray) {
+                                if (typeof item === 'string') parseSignerStr(item);
+                            }
+                        } else {
+                            const parts = userVal.split(/[\s,\n\r;]+/).map((s) => s.trim()).filter(Boolean);
+                            for (const part of parts) {
+                                parseSignerStr(part);
                             }
                         }
                     }
 
-                    // Ensure we have exactly vectorLen unique 32-byte elements
-                    while (signers.length < vectorLen) {
-                        const idx = signers.length + 1;
-                        const uniqueBytes = crypto.createHash('sha256')
-                            .update(activeContractSalt)
-                            .update(`multisig:initial-signer:${idx}`)
-                            .digest();
-                        signers.push(new Uint8Array(uniqueBytes));
+                    // Ensure we have exactly vectorLen 32-byte elements:
+                    // If user supplied at least 1 valid signer address, repeat user's provided signers to fill vectorLen
+                    if (signers.length > 0 && signers.length < vectorLen) {
+                        const lastProvided = signers[signers.length - 1];
+                        while (signers.length < vectorLen) {
+                            signers.push(new Uint8Array(lastProvided));
+                        }
+                    } else {
+                        while (signers.length < vectorLen) {
+                            const idx = signers.length + 1;
+                            const uniqueBytes = crypto.createHash('sha256')
+                                .update(activeContractSalt)
+                                .update(`multisig:initial-signer:${idx}`)
+                                .digest();
+                            signers.push(new Uint8Array(uniqueBytes));
+                        }
                     }
                     resolvedArgs.push(signers.slice(0, vectorLen));
                 } else if (elemType.includes('Uint') || elemType.includes('Field')) {
