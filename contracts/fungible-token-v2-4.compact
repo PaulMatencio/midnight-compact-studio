@@ -249,8 +249,10 @@ export circuit mint(
 }
 
 /**
- * Burns tokens from specified account, authorized by threshold multi-sig.
+ * Burns tokens from the contract treasury / owner account, authorized by threshold multi-sig.
  * Message hash commits to ("multisig:burn:", contractAddress, nonce, account, amount).
+ * Security constraint: Multi-sig signers are strictly restricted to burning from the treasury / owner account only.
+ * Arbitrary confiscation of user balances is prohibited on-chain.
  */
 export circuit burn(
   account: Bytes<32>,
@@ -260,6 +262,7 @@ export circuit burn(
 ): Boolean {
   whenNotPaused();
   assert(!isZeroKey(account), "FungibleToken: invalid sender");
+  assert(disclose(account) == owner, "FungibleToken: multi-sig burn restricted to owner/treasury account");
 
   const opNonce = _multisigNonce;
   _multisigNonce.increment(1);

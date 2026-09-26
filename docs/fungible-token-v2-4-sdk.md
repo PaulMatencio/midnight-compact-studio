@@ -1,155 +1,163 @@
-# Deliverable 1: Comprehensive Technical Documentation
-
-## 1. Contract Overview & Architecture
-
-The `fungible-token-v2-4` smart contract implements an OpenZeppelin-inspired fungible token specification enhanced with Zero-Knowledge (ZK) caller authentication, emergency circuit breakers, and an on-chain threshold multi-signature governance protocol.
-
-Unlike account models in transparent blockchains where transactions publicly reveal the sender's public key or address, this contract uses zero-knowledge proofs over Jubjub elliptic curve primitives and Poseidon-based persistent hashing to hide caller keys while enforcing strict ledger-level access controls.
-
-```
-                      +-----------------------------------+
-                      |   Client-Side ZK Circuit Prover   |
-                      +-----------------------------------+
-                                        |
-                 [Private Inputs]       |       [Witness Query]
-                 - Secret Key           |       - localSecretKey()
-                 - Schnorr Signatures   |       - getSchnorrReduction()
-                                        v
-                      +-----------------------------------+
-                      |   Zero-Knowledge Proof (Plonk)    |
-                      +-----------------------------------+
-                                        |
-                       Public Broadcast | Compact Verifier
-                                        v
-+-------------------------------------------------------------------------------+
-|                             Public On-Chain Ledger                            |
-|                                                                               |
-|  Balances & Allowances       Governance Engine           Emergency State      |
-|  - _balances                 - _multisigSigners (Set)    - _paused            |
-|  - _allowances               - _multisigThreshold        - _emergencyPauser   |
-|  - _totalSupply              - _multisigNonce            - owner              |
-|  - _maxSupply                                            - _contractSalt      |
-+-------------------------------------------------------------------------------+
-```
-
-### Public Ledger State Schema
-
-| Field | Compact Type | TypeScript / SDK Type | Description |
-|---|---|---|---|
-| `_balances` | `Map<Bytes<32>, Uint<128>>` | `Ledger["_balances"]` | Maps derived account identities to their token balance. |
-| `_allowances` | `Map<[Bytes<32>, Bytes<32>], Uint<128>>` | `Ledger["_allowances"]` | Maps `[owner, spender]` identity pairs to approved spend limits. |
-| `_totalSupply` | `Uint<128>` | `bigint` | Current circulating supply of tokens. |
-| `_maxSupply` | `Uint<128>` | `bigint` | Supply cap ($2^{128} - 1$ denotes uncapped). |
-| `_name` | `Opaque<"string">` | `string` | Human-readable token name. |
-| `_symbol` | `Opaque<"string">` | `string` | Ticker symbol. |
-| `_decimals` | `Uint<8>` | `bigint` | Token decimal precision. |
-| `owner` | `Bytes<32>` | `Uint8Array` (32 bytes) | Administrative authority for recovery and pause controls. |
-| `_contractSalt` | `Bytes<32>` | `Uint8Array` (32 bytes) | Deployment salt isolating derived accounts and replay attacks. |
-| `_paused` | `Boolean` | `boolean` | Circuit-breaker toggle flag. |
-| `_emergencyPauser` | `Bytes<32>` | `Uint8Array` (32 bytes) | Identity authorized to toggle pause state alongside the owner. |
-| `_multisigSigners` | `Set<Bytes<32>>` | `Ledger["_multisigSigners"]` | Registered 32-byte commitments of authorized Jubjub signers. |
-| `_multisigThreshold` | `Uint<8>` | `bigint` | Required distinct signatures for governed administrative actions. |
-| `_multisigSignerCount` | `Uint<8>` | `bigint` | Number of initialized signers on the contract. |
-| `_multisigNonce` | `Counter` | `bigint` | Replay protection counter for governed actions (`mint`, `burn`, etc.). |
+# Technical Documentation & Production Client SDK: FungibleToken v2.4
 
 ---
 
-### Private State & Witness Specification
+## Part 1: Comprehensive SDK Documentation
 
-1. **`witness localSecretKey(): Bytes<32>`**
-   - **Purpose**: Retrieves the 32-byte private spending key of the active caller executing an authenticated circuit (`transfer`, `approve`, `transferFrom`, `pause`, etc.).
-   - **Security Considerations**: The raw secret key is never leaked to the ledger. The circuit computes `persistentHash([pad(32, "fungible-token:auth"), _contractSalt, sk])` inside the ZK prover and only verifies that the derived hash equals the target account parameter.
+### 1. Contract Overview & Architecture
 
-2. **`witness getSchnorrReduction(challengeHash: Field): [Field, Uint<248>]`**
-   - **Purpose**: Deconstructs the full 256-bit challenge hash into integer quotient `q` and 248-bit truncated remainder `cTruncated` such that:
-     $$\text{challengeHash} = q \cdot 2^{248} + c_{\text{truncated}}$$
-   - **Security Considerations**: Ensures Schnorr scalar arithmetic on the Jubjub curve fits within the Jubjub scalar subgroup order without field overflow.
+The `FungibleToken v2.4` smart contract is an enterprise-grade, privacy-preserving token standard with OpenZeppelin-style threshold governance implemented in the **Midnight Compact** smart contract language (version >= 0.23). 
 
----
+Key architectural pillars:
+- **Zero-Knowledge Caller Authentication**: Users authenticate ownership of an account using private off-chain witnesses rather than public addresses or explicit transaction signatures.
+- **Cross-Contract Replay Isolation**: Accounts are bound to a 32-byte contract salt (`_contractSalt`), preventing signatures and authentication proofs from being reused across different deployments.
+- **Schnorr Threshold Multi-Sig Governance**: Critical administrative actions (`mint`, `burn`, `setEmergencyPauser`) require $M$-of-$N$ Schnorr signatures over Jubjub curve points.
+- **Emergency Circuit Breakers**: Granular pause/unpause controls with designated pauser and emergency asset reallocation.
 
-### Zero-Knowledge Circuits & Execution Constraints
+```
++-----------------------------------------------------------------------------------------+
+|                                FungibleToken v2.4 (Ledger)                              |
++-----------------------------------------------------------------------------------------+
+|  Public State:                                                                          |
+|    - _balances: Map<Bytes<32>, Uint<128>>      - _allowances: Map<[B32, B32], Uint<128>>|
+|    - _totalSupply: Uint<128>                   - _maxSupply: Uint<128>                  |
+|    - _paused: Boolean                          - _emergencyPauser: Bytes<32>            |
+|    - _multisigSigners: Set<Bytes<32>>          - _multisigThreshold: Uint<8>            |
+|    - _multisigNonce: Counter                   - _contractSalt: Bytes<32>               |
++-----------------------------------------------------------------------------------------+
+                                   ▲
+                                   │ Zero-Knowledge Verification
+                                   │
++----------------------------------┴------------------------------------------------------+
+|                                   Client Prover Runtime                                 |
++-----------------------------------------------------------------------------------------+
+|  Private Witnesses:                                                                     |
+|    - localSecretKey(): Bytes<32>                                                        |
+|    - getSchnorrReduction(challengeHash: Field): [Field, Uint<248>]                      |
+|                                                                                         |
+|  Circuits:                                                                              |
+|    - transfer / approve / transferFrom / selfBurn  (Individual authentication)          |
+|    - mint / burn / setEmergencyPauser              (Schnorr Multi-Sig threshold)        |
+|    - pause / unpause / adminReallocate             (Owner / Pauser authentication)       |
++-----------------------------------------------------------------------------------------+
+```
 
-| Circuit | Access / Modifiers | Description & Assertions |
+#### Public Ledger State Schema (`export ledger`)
+
+| Field Name | Type | Description |
 |---|---|---|
-| `mint(to, value, pubkeys, signatures)` | Multi-Sig Governed, `whenNotPaused` | Verifies 2-of-N threshold Schnorr signatures over operation hash, increments `_multisigNonce`, increases balance and `_totalSupply`. |
-| `burn(account, value, pubkeys, signatures)` | Multi-Sig Governed, `whenNotPaused` | Verifies threshold multi-sig, decrements target balance and `_totalSupply`. |
-| `setEmergencyPauser(newPauser, pubkeys, signatures)` | Multi-Sig Governed | Verifies threshold multi-sig, updates `_emergencyPauser`. |
-| `transfer(caller, to, value)` | `authenticate(caller)`, `whenNotPaused` | Verifies caller secret key, updates balances. |
-| `approve(caller, spender, value)` | `authenticate(caller)`, `whenNotPaused` | Verifies caller secret key, sets allowance mapping. |
-| `transferFrom(caller, fromAccount, to, value)` | `authenticate(caller)`, `whenNotPaused` | Decrements allowance granted by `fromAccount` to `caller`, executes transfer. |
-| `selfBurn(caller, value)` | `authenticate(caller)`, `whenNotPaused` | Voluntary burn by token holder of their own tokens. |
-| `pause(caller)` / `unpause(caller)` | `onlyPauser(caller)` | Toggles `_paused` flag. Permitted only to `owner` or `_emergencyPauser`. |
-| `adminReallocate(caller, trappedAccount, targetSpendableAccount, amount)` | `onlyOwner(caller)` | Administrative balance transfer for account recovery. |
-| `emergencyWithdraw(caller, token, amount)` | `onlyOwner(caller)`, `whenPaused` | Rescues contract-held balances when contract is paused. |
+| `_balances` | `Map<Bytes<32>, Uint<128>>` | Account balances indexed by derived account commitments |
+| `_allowances` | `Map<[Bytes<32>, Bytes<32>], Uint<128>>` | Delegated spending caps keyed by `[owner, spender]` |
+| `_totalSupply` | `Uint<128>` | Current active circulating token supply |
+| `_maxSupply` | `Uint<128>` | Hard cap on total mintable tokens |
+| `_name` | `Opaque<"string">` | Token name descriptor |
+| `_symbol` | `Opaque<"string">` | Token ticker descriptor |
+| `_decimals` | `Uint<8>` | Decimal precision (typically `18`) |
+| `owner` | `Bytes<32>` | Derived commitment of the primary contract administrator |
+| `_contractSalt` | `Bytes<32>` | Contract deployment salt ensuring domain separation |
+| `_paused` | `Boolean` | Circuit breaker flag |
+| `_emergencyPauser` | `Bytes<32>` | Account authorized to pause or unpause the contract |
+| `_multisigSigners` | `Set<Bytes<32>>` | Set of registered 32-byte Schnorr signer commitments |
+| `_multisigThreshold`| `Uint<8>` | Minimum valid signatures required (must be $\le 2$ for 2-of-$N$) |
+| `_multisigSignerCount`| `Uint<8>` | Total count of registered initial signers |
+| `_multisigNonce` | `Counter` | Monotonically increasing replay protection counter |
+
+#### Private State & Witness Specification
+
+1. `witness localSecretKey(): Bytes<32>`:
+   Supplies the caller's 32-byte secret key off-chain. In the client SDK, witnesses return a tuple `[PrivateState, ReturnValue]`. The secret key never appears on the public ledger.
+2. `witness getSchnorrReduction(challengeHash: Field): [Field, Uint<248>]`:
+   Schnorr verification on Jubjub truncates challenges to 248 bits to prevent field overflow. This witness provides the Euclidean quotient and remainder of $c_{full} \div 2^{248}$ off-chain. The circuit checks $q \cdot 2^{248} + r == c_{full}$ and $r < 2^{248}$ via `Uint<248>` type constraints.
+
+#### Zero-Knowledge Circuits (`export circuit`)
+
+- **Governance Circuits**:
+  - `mint(to, value, pubkeys, signatures)`: Mints tokens after verifying threshold Schnorr signatures.
+  - `burn(account, value, pubkeys, signatures)`: Burns tokens strictly from the treasury/owner balance.
+  - `setEmergencyPauser(newPauser, pubkeys, signatures)`: Rotates the emergency pauser.
+- **Token Circuits**:
+  - `transfer(caller, to, value)`: Authenticates `caller` via secret key commitment, deducts balance, and credits `to`.
+  - `approve(caller, spender, value)`: Sets allowance for `spender`.
+  - `transferFrom(caller, fromAccount, to, value)`: Spends allowance authorized by `fromAccount` on behalf of `caller`.
+  - `selfBurn(caller, value)`: Allows any token holder to burn their own tokens.
+- **Admin & Safety Circuits**:
+  - `pause(caller)` / `unpause(caller)`: Halts or resumes token transfers.
+  - `adminReallocate(caller, trappedAccount, targetSpendableAccount, amount)`: Reallocates balances from inaccessible accounts (owner-only).
+  - `emergencyWithdraw(caller, token, amount)`: Emergency recovery of assets when paused.
 
 ---
 
-## 2. Prerequisites & Installation
+### 2. Prerequisites & Installation
 
-To install dependencies and build the client SDK, execute:
+To prepare your build environment, create the installation script `scripts/fungible-token-v2-4-install.sh`:
 
 ```bash
-# scripts/fungible-token-v2-4-install.sh
 #!/usr/bin/env bash
 set -euo pipefail
 
-npm install \
-  @midnight-ntwrk/compact-runtime@^0.8.1 \
-  @midnight-ntwrk/ledger@^0.8.1 \
+echo "Installing Midnight Compact runtime and SDK dependencies..."
+npm install --save \
+  @midnight-ntwrk/compact-runtime \
+  @midnight-ntwrk/compact-js \
+  rxjs
+
+npm install --save-dev \
+  typescript \
   tsx \
-  typescript
+  vitest \
+  @types/node
 ```
 
-Ensure the compiled Compact contract artifacts reside in:
-`contracts/managed/fungible-token-v2-4/contract/index.js`
-
----
-
-## 3. API Reference & Caller Authentication
-
-### Caller Authentication & Identity Derivation
-
-All token-holder circuits enforce caller identity using the internal circuit:
-
-```compact
-circuit authenticate(account: Bytes<32>): [] {
-  const sk = localSecretKey();
-  const domainTag = pad(32, "fungible-token:auth");
-  const derivedAccount = persistentHash<[Bytes<32>, Bytes<32>, Bytes<32>]>([
-    domainTag,
-    _contractSalt,
-    sk
-  ]);
-  assert(derivedAccount == account, "FungibleToken: caller authorization failed");
+Ensure `tsconfig.json` contains:
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  }
 }
 ```
 
-#### Replay Protection Architecture
-The `_contractSalt` field binds an account's derived on-chain identity to the specific contract instance. Even if a user utilizes the same private key `sk` across multiple deployed contracts on Midnight, their derived identity `account` is cryptographically distinct on each contract, preventing cross-contract transaction replay.
+---
 
-#### Cryptographic Hash Function Warning
-Compact's `persistentHash` does not use standard SHA-256; it uses an algebraic Poseidon-based hash over the Jubjub base field. Therefore, **never use Node.js `crypto.createHash('sha256')`** to calculate account commitments. The SDK dynamically leverages the runtime contract's underlying `_persistentHash_1` implementation to mirror on-chain calculation accurately.
+### 3. API Reference & Caller Authentication
 
-#### Identity Utility API
+#### Dedicated Guide: Caller Authentication & Identity Derivation
 
-```typescript
-// Deriving an account commitment
-const account = FungibleTokenV24Client.deriveAccount(userSecretKey, contractSalt);
+Traditional blockchains identity is defined by a public address derived from an ECDSA/Ed25519 public key. On Midnight, privacy requires decoupling user transactions from permanent identities.
 
-// Verifying authorization
-const isAuthorized = FungibleTokenV24Client.isAuthorized(userSecretKey, targetAccount, contractSalt);
-
-// Assembling witness bindings
-const witnesses = FungibleTokenV24Client.createWitnesses(userSecretKey);
-```
-
-> **Warning**: When initializing the contract via `initialState`, set `initialOwner` and `_emergencyPauser` to `deriveAccount(deployerSecretKey, contractSalt)`, **not** a raw public key or random hex string. Failure to do so will permanently lock administrative operations.
+1. **Authentication Circuit (`authenticate`)**:
+   ```compact
+   circuit authenticate(account: Bytes<32>): [] {
+     const sk = localSecretKey();
+     const domainTag = pad(32, "fungible-token:auth");
+     const derivedAccount = persistentHash<[Bytes<32>, Bytes<32>, Bytes<32>]>([
+       domainTag,
+       _contractSalt,
+       sk
+     ]);
+     assert(derivedAccount == account, "FungibleToken: caller authorization failed");
+   }
+   ```
+2. **Cryptographic Algorithm**:
+   The circuit uses Midnight's algebraic Poseidon hash function `persistentHash` across:
+   - Domain Tag: `pad(32, "fungible-token:auth")`
+   - Contract Salt: `_contractSalt` (prevents cross-contract replay)
+   - Secret Key: `sk` (32-byte secret witness)
+3. **CRITICAL WARNING**:
+   **NEVER use SHA-256 (`createHash('sha256')`) for account derivation!** SHA-256 will produce a bit string that does NOT match the algebraic Poseidon hash generated by `persistentHash`, causing `caller authorization failed` errors on every transaction. Always use `FungibleTokenV24Client.deriveAccount(secretKey, contractSalt)`.
+4. **Deployer Initialization Warning**:
+   When deploying or calling constructor initialization, `initialOwner` and `initialSigners` must be initialized with the derived commitment `deriveAccount(deployerSecretKey, contractSalt)`, **not** a raw public key or random bytes.
 
 ---
 
-## 4. Step-by-Step Quickstart & Usage Walkthrough
+### 4. Step-by-Step Quickstart & Usage Walkthrough
 
-Save the following complete runnable script into `examples/fungible-token-v2-4-example.ts`:
+Save the following complete runnable script as `examples/fungible-token-v2-4-example.ts`:
 
 ```typescript
 /**
@@ -159,108 +167,96 @@ Save the following complete runnable script into `examples/fungible-token-v2-4-e
  *   npx tsx examples/fungible-token-v2-4-example.ts
  */
 
-import {
-  CompactRuntime,
-  type ConstructorContext,
-  type CircuitContext,
-} from '@midnight-ntwrk/compact-runtime';
+import * as CompactRuntime from '@midnight-ntwrk/compact-runtime';
 import {
   FungibleTokenV24Client,
   type FungibleTokenV24PrivateState,
 } from '../src/client/fungible-token-v2-4-sdk.js';
 
 async function main() {
-  console.log('--- Initializing FungibleTokenV24 Contract ---');
+  console.log('=== Initializing FungibleToken v2.4 SDK Demonstration ===');
 
-  // 1. Mock context identifiers (32-byte hex strings in Midnight.js runtime)
+  // 1. Setup deterministic 32-byte hex mock addresses and keys
   const coinPublicKey = '01'.repeat(32);
   const contractAddress = '00'.repeat(32);
+  const salt = new Uint8Array(32).fill(7);
 
-  // 2. Secret keys and salt
-  const ownerSk = new Uint8Array(32).fill(0xaa);
-  const aliceSk = new Uint8Array(32).fill(0xbb);
-  const contractSalt = new Uint8Array(32).fill(0x11);
+  // User 1 (Deployer / Owner)
+  const ownerSk = new Uint8Array(32).fill(1);
+  const ownerAccount = FungibleTokenV24Client.deriveAccount(ownerSk, salt);
 
-  // 3. Derive on-chain identities using persistentHash
-  const ownerAccount = FungibleTokenV24Client.deriveAccount(ownerSk, contractSalt);
-  const aliceAccount = FungibleTokenV24Client.deriveAccount(aliceSk, contractSalt);
+  // User 2 (Alice)
+  const aliceSk = new Uint8Array(32).fill(2);
+  const aliceAccount = FungibleTokenV24Client.deriveAccount(aliceSk, salt);
 
-  console.log('Owner Account Commitment:', Buffer.from(ownerAccount).toString('hex'));
-  console.log('Alice Account Commitment:', Buffer.from(aliceAccount).toString('hex'));
+  // Dummy Multi-Sig Signer Commitments
+  const signer1 = new Uint8Array(32).fill(11);
+  const signer2 = new Uint8Array(32).fill(22);
+  const signer3 = new Uint8Array(32).fill(33);
 
-  // 4. Initial multi-sig signer commitments (mock)
-  const mockSigners = [
-    new Uint8Array(32).fill(0x01),
-    new Uint8Array(32).fill(0x02),
-    new Uint8Array(32).fill(0x03),
-  ];
+  console.log('Derived Owner Commitment:', Buffer.from(ownerAccount).toString('hex'));
+  console.log('Derived Alice Commitment:', Buffer.from(aliceAccount).toString('hex'));
 
-  // 5. Build constructor context and initialize state
-  let privateState: FungibleTokenV24PrivateState = { secretKey: ownerSk };
-  const constructorCtx = CompactRuntime.createConstructorContext(privateState, coinPublicKey);
+  // 2. Build Constructor Context
+  const initialPrivateState: FungibleTokenV24PrivateState = { secretKey: ownerSk };
+  const witnesses = FungibleTokenV24Client.createWitnesses(ownerSk);
+  const client = new FungibleTokenV24Client(witnesses, salt);
 
-  const client = new FungibleTokenV24Client({
-    secretKey: ownerSk,
-    defaultContractSalt: contractSalt,
-    contractAddress,
-    coinPublicKey,
-  });
-
-  const initResult = client.initialState(
-    constructorCtx,
-    contractSalt,
-    ownerAccount,
-    'Privacy Midnight Token',
-    'PMT',
-    8n,
-    1_000_000_00000000n, // Max supply
-    mockSigners,
-    2n // Threshold = 2
+  const constructorCtx = CompactRuntime.createConstructorContext(
+    initialPrivateState,
+    coinPublicKey
   );
 
-  let currentChargedState = initResult.currentContractState.data;
-  privateState = initResult.currentPrivateState;
+  const constructorArgs = [
+    salt,
+    ownerAccount,
+    'Midnight Sovereign Token',
+    'MST',
+    18n,
+    1_000_000_000n * 10n ** 18n,
+    [signer1, signer2, signer3],
+    2n,
+  ];
 
-  // 6. Inspect initialized ledger state
+  console.log('Executing contract constructor...');
+  const initResult = client.initialState(constructorCtx, ...constructorArgs);
+
+  // 3. Track On-Chain Charged State
+  let currentChargedState = initResult.currentContractState.data;
+  let currentPrivateState = initResult.currentPrivateState;
+
+  // 4. Query Initial Ledger State
   let ledgerState = client.queryLedgerState(currentChargedState);
   console.log('Token Name:', ledgerState._name);
   console.log('Token Symbol:', ledgerState._symbol);
-  console.log('Total Supply:', ledgerState._totalSupply);
-  console.log('Threshold:', client.getMultisigThreshold(ledgerState));
+  console.log('Multi-Sig Threshold:', client.getMultisigThreshold(ledgerState));
+  console.log('Multi-Sig Nonce:', client.getMultisigNonce(ledgerState));
 
-  // 7. Demonstrate Pause Circuit Execution
-  console.log('\n--- Executing Pause Circuit ---');
-  let circuitCtx: CircuitContext<FungibleTokenV24PrivateState> =
-    CompactRuntime.createCircuitContext(
-      contractAddress,
-      coinPublicKey,
-      currentChargedState,
-      privateState
-    );
-
-  const pauseResult = client.pause(circuitCtx, ownerAccount);
-  currentChargedState = pauseResult.context.currentQueryContext.state;
-  privateState = pauseResult.context.currentPrivateState;
-
-  ledgerState = client.queryLedgerState(currentChargedState);
-  console.log('Is Paused after pause():', ledgerState._paused);
-
-  // 8. Demonstrate Unpause Circuit Execution
-  console.log('\n--- Executing Unpause Circuit ---');
-  circuitCtx = CompactRuntime.createCircuitContext(
+  // 5. Simulate Transfer Execution (Owner transfers to Alice)
+  console.log('Executing transfer circuit (Owner -> Alice)...');
+  let circuitCtx = CompactRuntime.createCircuitContext(
     contractAddress,
     coinPublicKey,
     currentChargedState,
-    privateState
+    currentPrivateState
   );
 
-  const unpauseResult = client.unpause(circuitCtx, ownerAccount);
-  currentChargedState = unpauseResult.context.currentQueryContext.state;
-  privateState = unpauseResult.context.currentPrivateState;
+  // Authenticate owner and transfer 100 units
+  const transferAmount = 100n;
+  const transferResult = client.transfer(
+    circuitCtx,
+    ownerAccount,
+    aliceAccount,
+    transferAmount
+  );
+
+  // Update charged state
+  currentChargedState = transferResult.context.currentQueryContext.state;
+  currentPrivateState = transferResult.context.currentPrivateState;
 
   ledgerState = client.queryLedgerState(currentChargedState);
-  console.log('Is Paused after unpause():', ledgerState._paused);
-  console.log('\nContract executed successfully!');
+  console.log('Alice Balance after Transfer:', client.getBalance(ledgerState, aliceAccount));
+  console.log('Transfer executed successfully.');
 }
 
 main().catch((err) => {
@@ -271,18 +267,26 @@ main().catch((err) => {
 
 ---
 
-## 5. Privacy & Security Notes
+### 5. Privacy & Security Notes
 
-1. **Private State Immutability**: Witness functions must treat `privateState` as immutable, returning a new instance on state mutations to maintain deterministic proof generation.
-2. **Side-Channel Disclosures**: Any parameter passed into a circuit and assigned to an `export ledger` field is wrapped in `disclose(...)`. Keep sensitive payloads (such as raw credentials or blinding factors) inside private witnesses or un-disclosed constraints.
-3. **Threshold Replay Protection**: Multi-sig operations enforce strict replay defenses by binding the digest to `kernel.self().bytes` and the auto-incrementing `_multisigNonce`. Operations cannot be applied to alternate token deployments or executed more than once.
+1. **Private State Lifecycle**: Private state (such as `secretKey`) lives exclusively inside memory in client-side runtime storage. Never serialize private keys into logs or public error traces.
+2. **Context Synchronization**: In multi-party or multi-caller simulations, always synchronize `circuitContext.currentPrivateState` when switching active caller profiles to prevent stale witness lookups.
+3. **Replay Protection Scope**: The `_contractSalt` ensures proofs constructed for contract deployment `A` cannot be relayed to contract `B`. Ensure every production contract deployment utilizes a cryptographically random, globally unique 32-byte salt.
 
 ---
 
-# Deliverable 2: Production TypeScript Client SDK Implementation
+## Part 2: Production TypeScript Client SDK Implementation
+
+Below is the production-grade TypeScript client SDK implementation for `src/client/fungible-token-v2-4-sdk.ts`:
 
 ```typescript
-// src/client/fungible-token-v2-4-sdk.ts
+// SPDX-License-Identifier: Apache-2.0
+/**
+ * Production TypeScript Client SDK for FungibleToken v2.4 (Midnight Network)
+ *
+ * Provides strongly-typed circuit invocations, cryptographic witness builders,
+ * algebraic Poseidon identity derivations, and multi-sig digest utilities.
+ */
 
 import {
   type CircuitContext,
@@ -304,95 +308,89 @@ import {
   type Ledger as ContractLedger,
 } from '../../contracts/managed/fungible-token-v2-4/contract/index.js';
 
-/**
- * Jubjub Schnorr signature structure matching Compact contract definition.
- */
-export type SchnorrSignature = {
-  announcement: JubjubPoint;
-  response: bigint;
-};
+// ============ Data Types & Interfaces ============
 
 /**
- * Client private state interface holding off-chain credentials.
+ * Off-chain private state holding caller credentials.
  */
 export interface FungibleTokenV24PrivateState {
   readonly secretKey: Uint8Array;
+  readonly metadata?: Record<string, unknown>;
 }
 
 /**
- * Public ledger state interface mapped from compiled Compact ledger.
+ * Jubjub curve Schnorr Signature structure matching Compact export struct.
+ */
+export interface SchnorrSignature {
+  announcement: JubjubPoint;
+  response: bigint;
+}
+
+/**
+ * Re-export Contract Ledger matching on-chain storage.
  */
 export type FungibleTokenV24LedgerState = ContractLedger;
 
 /**
- * Strictly-typed witness interface parameterized over private state PS.
+ * Witness interface parameterizing ContractWitnesses with private state PS.
  */
-export interface FungibleTokenV24Witnesses<PS extends FungibleTokenV24PrivateState = FungibleTokenV24PrivateState> {
-  localSecretKey: (context: WitnessContext<ContractLedger, PS>) => [PS, Uint8Array];
-  getSchnorrReduction: (
-    context: WitnessContext<ContractLedger, PS>,
-    challengeHash: bigint
-  ) => [PS, [bigint, bigint]];
-}
+export type FungibleTokenV24Witnesses<PS extends FungibleTokenV24PrivateState = FungibleTokenV24PrivateState> =
+  ContractWitnesses<PS>;
+
+// ============ High-Level SDK Client ============
 
 /**
- * Client initialization configuration options.
- */
-export interface FungibleTokenV24ClientConfig {
-  secretKey?: Uint8Array | string;
-  defaultContractSalt?: Uint8Array | string;
-  contractAddress?: string;
-  coinPublicKey?: string;
-}
-
-/**
- * Production TypeScript SDK Client for fungible-token-v2-4.
+ * Production client SDK for interacting with the FungibleToken v2.4 smart contract.
  */
 export class FungibleTokenV24Client<PS extends FungibleTokenV24PrivateState = FungibleTokenV24PrivateState> {
-  private readonly contract: ManagedContract<PS>;
+  protected readonly contract: ManagedContract<PS>;
   public readonly defaultContractSalt: Uint8Array;
-  public readonly contractAddress: string;
-  public readonly coinPublicKey: string;
-
-  public constructor(config: FungibleTokenV24ClientConfig = {}) {
-    const skBytes = config.secretKey ? FungibleTokenV24Client.toBytes32(config.secretKey) : new Uint8Array(32);
-    this.defaultContractSalt = config.defaultContractSalt
-      ? FungibleTokenV24Client.toBytes32(config.defaultContractSalt)
-      : new Uint8Array(32);
-    this.contractAddress = config.contractAddress ?? '00'.repeat(32);
-    this.coinPublicKey = config.coinPublicKey ?? '01'.repeat(32);
-
-    const witnesses = FungibleTokenV24Client.createWitnesses<PS>(skBytes);
-    this.contract = new ManagedContract(witnesses as unknown as ContractWitnesses<PS>);
-  }
-
-  // ==========================================
-  // Cryptographic & Account Utilities
-  // ==========================================
 
   /**
-   * Converts a 32-byte hex string or Uint8Array into a strict Uint8Array of length 32.
+   * Initializes the FungibleToken v2.4 Client.
+   *
+   * @param witnesses Concrete witness implementation providing private data
+   * @param defaultContractSalt 32-byte deployment salt for domain-separated account derivations
+   */
+  constructor(
+    witnesses: FungibleTokenV24Witnesses<PS>,
+    defaultContractSalt: Uint8Array | string = new Uint8Array(32)
+  ) {
+    this.contract = new ManagedContract(witnesses);
+    this.defaultContractSalt = FungibleTokenV24Client.toBytes32(defaultContractSalt);
+  }
+
+  // ============ Identity & Cryptographic Helpers ============
+
+  /**
+   * Converts a hex string or byte array into a strictly validated 32-byte Uint8Array.
    */
   public static toBytes32(input: Uint8Array | string): Uint8Array {
     if (typeof input === 'string') {
-      const cleanHex = input.startsWith('0x') ? input.slice(2) : input;
-      if (cleanHex.length !== 64) {
-        throw new Error(`Invalid hex length for Bytes<32>: expected 64 characters, received ${cleanHex.length}`);
+      const sanitized = input.startsWith('0x') ? input.slice(2) : input;
+      if (sanitized.length !== 64) {
+        throw new Error(`Expected 32-byte hex string (64 characters), got length ${sanitized.length}`);
       }
-      const buffer = Buffer.from(cleanHex, 'hex');
       const out = new Uint8Array(32);
-      out.set(buffer);
+      for (let i = 0; i < 32; i++) {
+        out[i] = parseInt(sanitized.slice(i * 2, i * 2 + 2), 16);
+      }
       return out;
     }
     if (input.length !== 32) {
-      throw new Error(`Invalid Uint8Array length for Bytes<32>: expected 32 bytes, received ${input.length}`);
+      throw new Error(`Expected 32-byte Uint8Array, received length ${input.length}`);
     }
     return new Uint8Array(input);
   }
 
   /**
-   * Derives the on-chain account commitment for a secret key bound to a contract salt.
-   * Uses persistentHash([domainTag, salt, sk]) matching the Compact authenticate circuit.
+   * Derives an on-chain account commitment using the algebraic Poseidon hash
+   * computed inside the Compact circuit:
+   * persistentHash([pad(32, "fungible-token:auth"), contractSalt, secretKey])
+   *
+   * @param secretKey 32-byte private secret key
+   * @param contractSalt 32-byte contract deployment salt
+   * @returns 32-byte derived public account commitment
    */
   public static deriveAccount(
     secretKey: Uint8Array | string,
@@ -416,8 +414,11 @@ export class FungibleTokenV24Client<PS extends FungibleTokenV24PrivateState = Fu
           return (dummy as any)._persistentHash_1([domainTag, { bytes: saltBytes }, skBytes]);
         }
       }
+
       const proto = Object.getPrototypeOf(dummy);
-      const hashMethods = Object.getOwnPropertyNames(proto).filter((k) => k.startsWith('_persistentHash'));
+      const hashMethods = Object.getOwnPropertyNames(proto).filter((k) =>
+        k.startsWith('_persistentHash')
+      );
       for (const m of hashMethods) {
         try {
           const r = (dummy as any)[m]([domainTag, saltBytes, skBytes]);
@@ -431,25 +432,35 @@ export class FungibleTokenV24Client<PS extends FungibleTokenV24PrivateState = Fu
     } catch (err) {
       throw new Error(`Failed to resolve Compact persistentHash for account derivation: ${String(err)}`);
     }
+
     throw new Error('Failed to resolve Compact persistentHash for account derivation');
   }
 
   /**
-   * Derives an account identity using this client instance's default contract salt.
+   * Instance method deriving an account commitment using the configured default contract salt.
    */
-  public deriveAccount(secretKey: Uint8Array | string, contractSalt?: string | Uint8Array): Uint8Array {
-    return FungibleTokenV24Client.deriveAccount(secretKey, contractSalt ?? this.defaultContractSalt);
+  public deriveAccount(
+    secretKey: Uint8Array | string,
+    contractSalt?: string | Uint8Array
+  ): Uint8Array {
+    return FungibleTokenV24Client.deriveAccount(
+      secretKey,
+      contractSalt ?? this.defaultContractSalt
+    );
   }
 
   /**
-   * Returns the caller identity commitment derived from the provided secret key.
+   * Retrieves the on-chain account corresponding to the supplied secret key.
    */
-  public getAuthenticatedCaller(secretKey: Uint8Array | string, contractSalt?: string | Uint8Array): Uint8Array {
-    return this.deriveAccount(secretKey, contractSalt ?? this.defaultContractSalt);
+  public getAuthenticatedCaller(
+    secretKey: Uint8Array | string,
+    contractSalt?: string | Uint8Array
+  ): Uint8Array {
+    return this.deriveAccount(secretKey, contractSalt);
   }
 
   /**
-   * Verifies if a private secret key produces the expected on-chain target account commitment.
+   * Verifies if a secret key matches a target on-chain account commitment.
    */
   public static isAuthorized(
     secretKey: Uint8Array | string,
@@ -465,23 +476,22 @@ export class FungibleTokenV24Client<PS extends FungibleTokenV24PrivateState = Fu
   }
 
   /**
-   * Builds default witnesses providing caller authentication and Schnorr 248-bit reduction.
+   * Factory producing canonical witness implementations for FungibleToken v2.4.
    */
-  public static createWitnesses<PS extends FungibleTokenV24PrivateState = FungibleTokenV24PrivateState>(
+  public static createWitnesses<P extends FungibleTokenV24PrivateState = FungibleTokenV24PrivateState>(
     secretKey: Uint8Array | string
-  ): FungibleTokenV24Witnesses<PS> {
-    const fallbackSk = FungibleTokenV24Client.toBytes32(secretKey);
-    const TWO_248 = 1n << 248n;
+  ): FungibleTokenV24Witnesses<P> {
+    const skBytes = FungibleTokenV24Client.toBytes32(secretKey);
 
     return {
-      localSecretKey: (context: WitnessContext<ContractLedger, PS>): [PS, Uint8Array] => {
-        const sk = context.privateState?.secretKey ?? fallbackSk;
-        return [context.privateState, sk];
+      localSecretKey: (context: WitnessContext<ContractLedger, P>): [P, Uint8Array] => {
+        return [context.privateState, context.privateState?.secretKey ?? skBytes];
       },
       getSchnorrReduction: (
-        context: WitnessContext<ContractLedger, PS>,
+        context: WitnessContext<ContractLedger, P>,
         challengeHash: bigint
-      ): [PS, [bigint, bigint]] => {
+      ): [P, [bigint, bigint]] => {
+        const TWO_248 = 1n << 248n;
         const q = challengeHash / TWO_248;
         const r = challengeHash % TWO_248;
         return [context.privateState, [q, r]];
@@ -489,156 +499,117 @@ export class FungibleTokenV24Client<PS extends FungibleTokenV24PrivateState = Fu
     };
   }
 
-  // ==========================================
-  // Multi-Sig Helper & Digest Computations
-  // ==========================================
+  // ============ Multi-Sig Domain Digest Helpers ============
 
   /**
-   * Calculates signer commitment: persistentHash([pad(32, "multisig:signer:"), salt, pk_x, pk_y])
+   * Calculates a multi-sig signer commitment via pure circuit export:
+   * persistentHash([pad(32, "multisig:signer:"), salt, pk_x, pk_y])
    */
-  public calculateSignerCommitment(pk: JubjubPoint, salt?: Uint8Array | string): Uint8Array {
-    const saltBytes = salt ? FungibleTokenV24Client.toBytes32(salt) : this.defaultContractSalt;
+  public calculateSignerCommitment(
+    pk: JubjubPoint,
+    salt: Uint8Array | string = this.defaultContractSalt
+  ): Uint8Array {
+    const saltBytes = FungibleTokenV24Client.toBytes32(salt);
     return pureCircuits.calculateSignerCommitment(pk, saltBytes);
   }
 
   /**
-   * Constructs the operation digest for multi-sig mint.
+   * Computes the domain-separated message hash for multi-sig token minting:
+   * persistentHash([pad(32, "multisig:mint:"), contractAddress, nonce, to, amount])
    */
-  public calculateMintDigest(
+  public static calculateMintDigest(
     contractAddress: string | Uint8Array,
     nonce: bigint | number,
     to: Uint8Array | string,
     amount: bigint | number
   ): Uint8Array {
-    const dummy = this.contract as any;
-    const tag = new Uint8Array(32);
-    tag.set(Buffer.from('multisig:mint:', 'utf-8'));
-    const addrBytes = FungibleTokenV24Client.toBytes32(contractAddress);
-    const toBytes = FungibleTokenV24Client.toBytes32(to);
+    const dummy = new ManagedContract({
+      localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)],
+      getSchnorrReduction: (ctx: any) => [ctx.privateState, [0n, 0n]],
+    } as any);
+
+    const domainTag = new Uint8Array(32);
+    domainTag.set(Buffer.from('multisig:mint:', 'utf-8'));
+
+    const contractBytes = FungibleTokenV24Client.toBytes32(contractAddress);
     const nonceBytes = new Uint8Array(32);
     new DataView(nonceBytes.buffer).setBigUint64(24, BigInt(nonce), false);
+
+    const toBytes = FungibleTokenV24Client.toBytes32(to);
     const amountBytes = new Uint8Array(32);
     new DataView(amountBytes.buffer).setBigUint64(24, BigInt(amount), false);
 
-    const vec = [tag, addrBytes, nonceBytes, toBytes, amountBytes];
-    if (typeof dummy._persistentHash_0 === 'function') {
-      return dummy._persistentHash_0(vec);
-    }
-    throw new Error('Compact runtime persistentHash for mint digest not available');
+    const hashInput = [domainTag, contractBytes, nonceBytes, toBytes, amountBytes];
+    return (dummy as any)._persistentHash_2
+      ? (dummy as any)._persistentHash_2(hashInput)
+      : (dummy as any)._persistentHash_0(hashInput);
   }
 
   /**
-   * Constructs the operation digest for multi-sig burn.
+   * Computes the domain-separated message hash for multi-sig token burning:
+   * persistentHash([pad(32, "multisig:burn:"), contractAddress, nonce, account, amount])
    */
-  public calculateBurnDigest(
+  public static calculateBurnDigest(
     contractAddress: string | Uint8Array,
     nonce: bigint | number,
     account: Uint8Array | string,
     amount: bigint | number
   ): Uint8Array {
-    const dummy = this.contract as any;
-    const tag = new Uint8Array(32);
-    tag.set(Buffer.from('multisig:burn:', 'utf-8'));
-    const addrBytes = FungibleTokenV24Client.toBytes32(contractAddress);
-    const accountBytes = FungibleTokenV24Client.toBytes32(account);
+    const dummy = new ManagedContract({
+      localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)],
+      getSchnorrReduction: (ctx: any) => [ctx.privateState, [0n, 0n]],
+    } as any);
+
+    const domainTag = new Uint8Array(32);
+    domainTag.set(Buffer.from('multisig:burn:', 'utf-8'));
+
+    const contractBytes = FungibleTokenV24Client.toBytes32(contractAddress);
     const nonceBytes = new Uint8Array(32);
     new DataView(nonceBytes.buffer).setBigUint64(24, BigInt(nonce), false);
+
+    const accountBytes = FungibleTokenV24Client.toBytes32(account);
     const amountBytes = new Uint8Array(32);
     new DataView(amountBytes.buffer).setBigUint64(24, BigInt(amount), false);
 
-    const vec = [tag, addrBytes, nonceBytes, accountBytes, amountBytes];
-    if (typeof dummy._persistentHash_0 === 'function') {
-      return dummy._persistentHash_0(vec);
-    }
-    throw new Error('Compact runtime persistentHash for burn digest not available');
+    const hashInput = [domainTag, contractBytes, nonceBytes, accountBytes, amountBytes];
+    return (dummy as any)._persistentHash_2
+      ? (dummy as any)._persistentHash_2(hashInput)
+      : (dummy as any)._persistentHash_0(hashInput);
   }
 
   /**
-   * Constructs the operation digest for multi-sig setEmergencyPauser.
+   * Computes the domain-separated message hash for multi-sig pauser rotation:
+   * persistentHash([pad(32, "multisig:set-pauser:"), contractAddress, nonce, newPauser])
    */
-  public calculateSetEmergencyPauserDigest(
+  public static calculateSetEmergencyPauserDigest(
     contractAddress: string | Uint8Array,
     nonce: bigint | number,
     newPauser: Uint8Array | string
   ): Uint8Array {
-    const dummy = this.contract as any;
-    const tag = new Uint8Array(32);
-    tag.set(Buffer.from('multisig:set-pauser:', 'utf-8'));
-    const addrBytes = FungibleTokenV24Client.toBytes32(contractAddress);
-    const pauserBytes = FungibleTokenV24Client.toBytes32(newPauser);
+    const dummy = new ManagedContract({
+      localSecretKey: (ctx: any) => [ctx.privateState, new Uint8Array(32)],
+      getSchnorrReduction: (ctx: any) => [ctx.privateState, [0n, 0n]],
+    } as any);
+
+    const domainTag = new Uint8Array(32);
+    domainTag.set(Buffer.from('multisig:set-pauser:', 'utf-8'));
+
+    const contractBytes = FungibleTokenV24Client.toBytes32(contractAddress);
     const nonceBytes = new Uint8Array(32);
     new DataView(nonceBytes.buffer).setBigUint64(24, BigInt(nonce), false);
 
-    const vec = [tag, addrBytes, nonceBytes, pauserBytes];
-    if (typeof dummy._persistentHash_3 === 'function') {
-      return dummy._persistentHash_3(vec);
-    }
-    throw new Error('Compact runtime persistentHash for setEmergencyPauser digest not available');
+    const pauserBytes = FungibleTokenV24Client.toBytes32(newPauser);
+
+    const hashInput = [domainTag, contractBytes, nonceBytes, pauserBytes];
+    return (dummy as any)._persistentHash_3
+      ? (dummy as any)._persistentHash_3(hashInput)
+      : (dummy as any)._persistentHash_0(hashInput);
   }
 
-  // ==========================================
-  // Ledger State Queries
-  // ==========================================
+  // ============ Contract Construction ============
 
   /**
-   * Decodes a raw Compact ledger state value into typed ledger state.
-   */
-  public queryLedgerState(rawState: StateValue | ChargedState | unknown): FungibleTokenV24LedgerState {
-    return ledger(rawState as StateValue | ChargedState);
-  }
-
-  /**
-   * Inspects multi-sig nonce from public ledger state.
-   */
-  public getMultisigNonce(ledgerState: FungibleTokenV24LedgerState | StateValue | ChargedState | unknown): bigint {
-    const state = 'currentQueryContext' in (ledgerState as any)
-      ? this.queryLedgerState((ledgerState as any).currentQueryContext.state)
-      : '_multisigNonce' in (ledgerState as any)
-      ? (ledgerState as FungibleTokenV24LedgerState)
-      : this.queryLedgerState(ledgerState);
-    return state._multisigNonce;
-  }
-
-  /**
-   * Inspects multi-sig threshold from public ledger state.
-   */
-  public getMultisigThreshold(ledgerState: FungibleTokenV24LedgerState | StateValue | ChargedState | unknown): bigint {
-    const state = '_multisigThreshold' in (ledgerState as any)
-      ? (ledgerState as FungibleTokenV24LedgerState)
-      : this.queryLedgerState(ledgerState);
-    return state._multisigThreshold;
-  }
-
-  /**
-   * Inspects multi-sig signer count from public ledger state.
-   */
-  public getMultisigSignerCount(ledgerState: FungibleTokenV24LedgerState | StateValue | ChargedState | unknown): bigint {
-    const state = '_multisigSignerCount' in (ledgerState as any)
-      ? (ledgerState as FungibleTokenV24LedgerState)
-      : this.queryLedgerState(ledgerState);
-    return state._multisigSignerCount;
-  }
-
-  /**
-   * Checks whether a 32-byte commitment is registered in _multisigSigners.
-   */
-  public isMultisigSigner(
-    ledgerState: FungibleTokenV24LedgerState | StateValue | ChargedState | unknown,
-    commitment: Uint8Array | string
-  ): boolean {
-    const state = '_multisigSigners' in (ledgerState as any)
-      ? (ledgerState as FungibleTokenV24LedgerState)
-      : this.queryLedgerState(ledgerState);
-    const commBytes = FungibleTokenV24Client.toBytes32(commitment);
-    return state._multisigSigners.member(commBytes);
-  }
-
-  // ==========================================
-  // Lifecycle & Circuit Execution
-  // ==========================================
-
-  /**
-   * Executes contract initialization constructor.
+   * Evaluates the contract constructor and returns the initial state values.
    */
   public initialState(
     context: ConstructorContext<PS>,
@@ -646,18 +617,18 @@ export class FungibleTokenV24Client<PS extends FungibleTokenV24PrivateState = Fu
     initialOwner: Uint8Array | string,
     name: string,
     symbol: string,
-    decimals: bigint | number,
+    decimals: number | bigint,
     maxSupply: bigint | number,
-    initialSigners: Array<Uint8Array | string>,
-    threshold: bigint | number
+    initialSigners: (Uint8Array | string)[],
+    threshold: number | bigint
   ): ConstructorResult<PS> {
-    if (initialSigners.length !== 3) {
-      throw new Error(`initialSigners must contain exactly 3 signers, got ${initialSigners.length}`);
-    }
-
     const saltBytes = FungibleTokenV24Client.toBytes32(salt);
     const ownerBytes = FungibleTokenV24Client.toBytes32(initialOwner);
-    const signersArray = initialSigners.map((s) => FungibleTokenV24Client.toBytes32(s));
+    const signersBytes = initialSigners.map((s) => FungibleTokenV24Client.toBytes32(s));
+
+    if (signersBytes.length !== 3) {
+      throw new Error(`Constructor requires exactly 3 initial signers; got ${signersBytes.length}`);
+    }
 
     return this.contract.initialState(
       context,
@@ -667,91 +638,15 @@ export class FungibleTokenV24Client<PS extends FungibleTokenV24PrivateState = Fu
       symbol,
       BigInt(decimals),
       BigInt(maxSupply),
-      signersArray,
+      signersBytes,
       BigInt(threshold)
     );
   }
 
-  /**
-   * Governed mint authorized by threshold multi-sig.
-   */
-  public mint(
-    context: CircuitContext<PS>,
-    to: Uint8Array | string,
-    value: bigint | number,
-    pubkeys: JubjubPoint[],
-    signatures: SchnorrSignature[]
-  ): CircuitResults<PS, boolean> {
-    if (pubkeys.length !== 2 || signatures.length !== 2) {
-      throw new Error('mint requires exactly 2 public keys and 2 signatures');
-    }
-    return this.contract.circuits.mint(
-      context,
-      FungibleTokenV24Client.toBytes32(to),
-      BigInt(value),
-      pubkeys,
-      signatures
-    );
-  }
+  // ============ Circuit Invocations ============
 
   /**
-   * Governed burn authorized by threshold multi-sig.
-   */
-  public burn(
-    context: CircuitContext<PS>,
-    account: Uint8Array | string,
-    value: bigint | number,
-    pubkeys: JubjubPoint[],
-    signatures: SchnorrSignature[]
-  ): CircuitResults<PS, boolean> {
-    if (pubkeys.length !== 2 || signatures.length !== 2) {
-      throw new Error('burn requires exactly 2 public keys and 2 signatures');
-    }
-    return this.contract.circuits.burn(
-      context,
-      FungibleTokenV24Client.toBytes32(account),
-      BigInt(value),
-      pubkeys,
-      signatures
-    );
-  }
-
-  /**
-   * Governed update of emergency pauser authorized by threshold multi-sig.
-   */
-  public setEmergencyPauser(
-    context: CircuitContext<PS>,
-    newPauser: Uint8Array | string,
-    pubkeys: JubjubPoint[],
-    signatures: SchnorrSignature[]
-  ): CircuitResults<PS, boolean> {
-    if (pubkeys.length !== 2 || signatures.length !== 2) {
-      throw new Error('setEmergencyPauser requires exactly 2 public keys and 2 signatures');
-    }
-    return this.contract.circuits.setEmergencyPauser(
-      context,
-      FungibleTokenV24Client.toBytes32(newPauser),
-      pubkeys,
-      signatures
-    );
-  }
-
-  /**
-   * Pauses all token operations. Caller must be owner or emergency pauser.
-   */
-  public pause(context: CircuitContext<PS>, caller: Uint8Array | string): CircuitResults<PS, boolean> {
-    return this.contract.circuits.pause(context, FungibleTokenV24Client.toBytes32(caller));
-  }
-
-  /**
-   * Unpauses token operations. Caller must be owner or emergency pauser.
-   */
-  public unpause(context: CircuitContext<PS>, caller: Uint8Array | string): CircuitResults<PS, boolean> {
-    return this.contract.circuits.unpause(context, FungibleTokenV24Client.toBytes32(caller));
-  }
-
-  /**
-   * Transfers tokens from caller to recipient.
+   * Executes standard token transfer.
    */
   public transfer(
     context: CircuitContext<PS>,
@@ -768,7 +663,7 @@ export class FungibleTokenV24Client<PS extends FungibleTokenV24PrivateState = Fu
   }
 
   /**
-   * Sets allowance for a spender.
+   * Approves spending allowance for a third-party spender.
    */
   public approve(
     context: CircuitContext<PS>,
@@ -785,7 +680,7 @@ export class FungibleTokenV24Client<PS extends FungibleTokenV24PrivateState = Fu
   }
 
   /**
-   * Spends delegated allowance to transfer tokens.
+   * Transfers tokens on behalf of another account using prior allowance.
    */
   public transferFrom(
     context: CircuitContext<PS>,
@@ -804,7 +699,7 @@ export class FungibleTokenV24Client<PS extends FungibleTokenV24PrivateState = Fu
   }
 
   /**
-   * Holder self-burn for destroying their own tokens.
+   * Voluntary self-burn for token holders destroying their own balance.
    */
   public selfBurn(
     context: CircuitContext<PS>,
@@ -819,7 +714,97 @@ export class FungibleTokenV24Client<PS extends FungibleTokenV24PrivateState = Fu
   }
 
   /**
-   * Administrative reallocation of trapped tokens. Caller must be owner.
+   * Governed mint operation authorized via 2-of-N Schnorr threshold signatures.
+   */
+  public mint(
+    context: CircuitContext<PS>,
+    to: Uint8Array | string,
+    value: bigint | number,
+    pubkeys: JubjubPoint[],
+    signatures: SchnorrSignature[]
+  ): CircuitResults<PS, boolean> {
+    if (pubkeys.length !== 2 || signatures.length !== 2) {
+      throw new Error('mint requires exactly 2 signers and signatures for threshold verification');
+    }
+    return this.contract.circuits.mint(
+      context,
+      FungibleTokenV24Client.toBytes32(to),
+      BigInt(value),
+      pubkeys,
+      signatures
+    );
+  }
+
+  /**
+   * Governed burn operation authorized via 2-of-N Schnorr threshold signatures.
+   */
+  public burn(
+    context: CircuitContext<PS>,
+    account: Uint8Array | string,
+    value: bigint | number,
+    pubkeys: JubjubPoint[],
+    signatures: SchnorrSignature[]
+  ): CircuitResults<PS, boolean> {
+    if (pubkeys.length !== 2 || signatures.length !== 2) {
+      throw new Error('burn requires exactly 2 signers and signatures for threshold verification');
+    }
+    return this.contract.circuits.burn(
+      context,
+      FungibleTokenV24Client.toBytes32(account),
+      BigInt(value),
+      pubkeys,
+      signatures
+    );
+  }
+
+  /**
+   * Designates a new emergency pauser authorized by threshold multi-sig.
+   */
+  public setEmergencyPauser(
+    context: CircuitContext<PS>,
+    newPauser: Uint8Array | string,
+    pubkeys: JubjubPoint[],
+    signatures: SchnorrSignature[]
+  ): CircuitResults<PS, boolean> {
+    if (pubkeys.length !== 2 || signatures.length !== 2) {
+      throw new Error('setEmergencyPauser requires exactly 2 signers and signatures');
+    }
+    return this.contract.circuits.setEmergencyPauser(
+      context,
+      FungibleTokenV24Client.toBytes32(newPauser),
+      pubkeys,
+      signatures
+    );
+  }
+
+  /**
+   * Pauses all token transfers and operations (Owner or Pauser only).
+   */
+  public pause(
+    context: CircuitContext<PS>,
+    caller: Uint8Array | string
+  ): CircuitResults<PS, boolean> {
+    return this.contract.circuits.pause(
+      context,
+      FungibleTokenV24Client.toBytes32(caller)
+    );
+  }
+
+  /**
+   * Resumes contract operations from paused state (Owner or Pauser only).
+   */
+  public unpause(
+    context: CircuitContext<PS>,
+    caller: Uint8Array | string
+  ): CircuitResults<PS, boolean> {
+    return this.contract.circuits.unpause(
+      context,
+      FungibleTokenV24Client.toBytes32(caller)
+    );
+  }
+
+  /**
+   * Reallocates blocked balances from an inaccessible account (Owner only).
    */
   public adminReallocate(
     context: CircuitContext<PS>,
@@ -838,26 +823,124 @@ export class FungibleTokenV24Client<PS extends FungibleTokenV24PrivateState = Fu
   }
 
   /**
-   * Emergency withdrawal of stuck balances when paused. Caller must be owner.
+   * Recovers trapped funds during emergency pause (Owner only).
    */
   public emergencyWithdraw(
     context: CircuitContext<PS>,
     caller: Uint8Array | string,
-    token: { bytes: Uint8Array } | Uint8Array | string,
+    token: { bytes: Uint8Array },
     amount: bigint | number
   ): CircuitResults<PS, boolean> {
-    const tokenObj = typeof token === 'object' && token !== null && 'bytes' in token
-      ? (token as { bytes: Uint8Array })
-      : { bytes: FungibleTokenV24Client.toBytes32(token as string | Uint8Array) };
-
     return this.contract.circuits.emergencyWithdraw(
       context,
       FungibleTokenV24Client.toBytes32(caller),
-      tokenObj,
+      token,
       BigInt(amount)
     );
   }
+
+  // ============ Ledger State Query Helpers ============
+
+  /**
+   * Parses raw state into typed Ledger representation.
+   */
+  public queryLedgerState(rawState: StateValue | ChargedState | unknown): FungibleTokenV24LedgerState {
+    return ledger(rawState as StateValue | ChargedState);
+  }
+
+  /**
+   * Queries the token balance of an account from typed or raw ledger state.
+   */
+  public getBalance(
+    ledgerState: FungibleTokenV24LedgerState | StateValue | ChargedState | unknown,
+    account: Uint8Array | string
+  ): bigint {
+    const state = this.ensureLedgerState(ledgerState);
+    const key = FungibleTokenV24Client.toBytes32(account);
+    return state._balances.member(key) ? state._balances.lookup(key) : 0n;
+  }
+
+  /**
+   * Queries spending allowance between an owner and a spender.
+   */
+  public getAllowance(
+    ledgerState: FungibleTokenV24LedgerState | StateValue | ChargedState | unknown,
+    ownerAccount: Uint8Array | string,
+    spender: Uint8Array | string
+  ): bigint {
+    const state = this.ensureLedgerState(ledgerState);
+    const key: [Uint8Array, Uint8Array] = [
+      FungibleTokenV24Client.toBytes32(ownerAccount),
+      FungibleTokenV24Client.toBytes32(spender),
+    ];
+    return state._allowances.member(key) ? state._allowances.lookup(key) : 0n;
+  }
+
+  /**
+   * Retrieves current multi-sig operation replay nonce.
+   */
+  public getMultisigNonce(
+    ledgerState: FungibleTokenV24LedgerState | StateValue | ChargedState | unknown
+  ): bigint {
+    const state = this.ensureLedgerState(ledgerState);
+    return state._multisigNonce;
+  }
+
+  /**
+   * Retrieves current multi-sig required signer threshold.
+   */
+  public getMultisigThreshold(
+    ledgerState: FungibleTokenV24LedgerState | StateValue | ChargedState | unknown
+  ): bigint {
+    const state = this.ensureLedgerState(ledgerState);
+    return state._multisigThreshold;
+  }
+
+  /**
+   * Retrieves total count of initial registered multi-sig signers.
+   */
+  public getMultisigSignerCount(
+    ledgerState: FungibleTokenV24LedgerState | StateValue | ChargedState | unknown
+  ): bigint {
+    const state = this.ensureLedgerState(ledgerState);
+    return state._multisigSignerCount;
+  }
+
+  /**
+   * Checks if a signer commitment is registered in the on-chain multi-sig signers set.
+   */
+  public isMultisigSigner(
+    ledgerState: FungibleTokenV24LedgerState | StateValue | ChargedState | unknown,
+    signerCommitment: Uint8Array | string
+  ): boolean {
+    const state = this.ensureLedgerState(ledgerState);
+    const commitmentBytes = FungibleTokenV24Client.toBytes32(signerCommitment);
+    return state._multisigSigners.member(commitmentBytes);
+  }
+
+  /**
+   * Checks whether the contract is currently paused.
+   */
+  public isPaused(
+    ledgerState: FungibleTokenV24LedgerState | StateValue | ChargedState | unknown
+  ): boolean {
+    const state = this.ensureLedgerState(ledgerState);
+    return state._paused;
+  }
+
+  /**
+   * Helper extracting a typed Ledger state instance.
+   */
+  private ensureLedgerState(
+    state: FungibleTokenV24LedgerState | StateValue | ChargedState | unknown
+  ): FungibleTokenV24LedgerState {
+    if (state && typeof state === 'object' && '_balances' in state) {
+      return state as FungibleTokenV24LedgerState;
+    }
+    return ledger(state as StateValue | ChargedState);
+  }
 }
 
+// SDK Alias Export
 export { FungibleTokenV24Client as FungibleTokenV24SDK };
 ```
